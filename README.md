@@ -1,2 +1,0 @@
-# SmartChess
-Minimal Chess Bot

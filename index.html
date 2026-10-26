@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Chess Bot</title>
+    <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+    <div class="chess-app">
+        <!-- Status Bar -->
+        <div class="status" id="status">
+            <span>AI Thinking...</span>
+        </div>
+
+        <!-- The Board Grid (64 Cells) -->
+        <div id="chessBoard">
+            <div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>
+            <div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>
+            <div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>
+            <div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>
+            <div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>
+            <div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>
+            <div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>
+            <div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>
+        </div>
+
+        <!-- Footer Controls -->
+        <div class="footer">
+            <button type="button" onclick="resetBoard()">Reset</button>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>

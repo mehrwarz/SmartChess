@@ -1,0 +1,106 @@
+ /* --- UI DESIGN SYSTEM --- */
+        :root {
+            --board-size: 480px;
+            --cell-size: calc(var(--board-size) / 8);
+            --color-board-dark: #16243d; 
+            --color-board-light: #4a5c6d; 
+            --status-bg: #1f293b;
+            --font-family: 'Segoe UI', Roboto, sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+        }
+
+        body {
+            font-family: var(--font-family);
+            color: #ffffff;
+            background: var(--status-bg);
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* --- LAYOUT --- */
+        .chess-app {
+            width: var(--board-size);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+        }
+
+        /* Status Bar */
+        .status {
+            margin-bottom: 15px;
+            width: 100%;
+            text-align: center;
+            font-weight: 600;
+            color: #e5e4e9;
+        }
+
+        /* --- THE BOARD VISUALIZATION --- */
+        #chessBoard {
+            width: var(--board-size);
+            height: var(--board-size);
+            display: grid;
+            grid-template-columns: repeat(8, var(--cell-size));
+            grid-template-rows: repeat(8, var(--cell-size));
+            border: 4px solid #000000;
+        }
+
+        /* Correct 8x8 Chessboard Alternating Pattern */
+        #chessBoard div {
+            width: var(--cell-size);
+            height: var(--cell-size);
+        }
+
+        #chessBoard div:nth-child(-n+8):nth-child(odd),
+        #chessBoard div:nth-child(n+9):nth-child(-n+16):nth-child(even),
+        #chessBoard div:nth-child(n+17):nth-child(-n+24):nth-child(odd),
+        #chessBoard div:nth-child(n+25):nth-child(-n+32):nth-child(even),
+        #chessBoard div:nth-child(n+33):nth-child(-n+40):nth-child(odd),
+        #chessBoard div:nth-child(n+41):nth-child(-n+48):nth-child(even),
+        #chessBoard div:nth-child(n+49):nth-child(-n+56):nth-child(odd),
+        #chessBoard div:nth-child(n+57):nth-child(n):nth-child(even) {
+            background-color: var(--color-board-light);
+        }
+
+        #chessBoard div:nth-child(-n+8):nth-child(even),
+        #chessBoard div:nth-child(n+9):nth-child(-n+16):nth-child(odd),
+        #chessBoard div:nth-child(n+17):nth-child(-n+24):nth-child(even),
+        #chessBoard div:nth-child(n+25):nth-child(-n+32):nth-child(odd),
+        #chessBoard div:nth-child(n+33):nth-child(-n+40):nth-child(even),
+        #chessBoard div:nth-child(n+41):nth-child(-n+48):nth-child(odd),
+        #chessBoard div:nth-child(n+49):nth-child(-n+56):nth-child(even),
+        #chessBoard div:nth-child(n+57):nth-child(n):nth-child(odd) {
+            background-color: var(--color-board-dark);
+        }
+
+        /* --- CONTROLS --- */
+        .footer {
+            margin-top: 20px;
+            display: flex;
+            justify-content: center;
+            width: 100%;
+        }
+
+        button {
+            background-color: var(--color-board-dark);
+            font-family: var(--font-family);
+            color: #e5e4e9;
+            border: 2px solid var(--color-board-light);
+            font-weight: bold;
+            cursor: pointer;
+            width: 150px;
+            height: 45px;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+        }
+
+        button:hover {
+            background-color: var(--color-board-light);
+        }
