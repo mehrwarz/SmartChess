@@ -1,6 +1,6 @@
  /* --- UI DESIGN SYSTEM --- */
         :root {
-            --board-size: 480px;
+            --board-size: 720px;
             --cell-size: calc(var(--board-size) / 8);
             --color-board-dark: #16243d; 
             --color-board-light: #4a5c6d; 
