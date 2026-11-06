@@ -1,12 +1,12 @@
 import { ChessGame } from './actions.js';
-import { BrianAI } from './brian.js';
+import { GameBrian } from './brian.js';
 import { ChessUI } from './ui.js';
 
 class GameManager {
     constructor() {
         this.game = new ChessGame();
         this.ui = new ChessUI();
-        this.ai = new BrianAI();
+        this.ai = new GameBrian();
 
         this.gameStarted = false;
         this.gameOver = false;
