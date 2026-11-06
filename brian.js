@@ -195,6 +195,84 @@ export class GameBrian {
 
         return bestMove;
     }
+     
+    /**
+     * Find the best promotion piece for a pawn move.
+     *
+     * Tests queen, rook, bishop and knight promotions using
+     * the same minimax and alpha-beta search as findBestMove().
+     *
+     * @param {Object} game - Current ChessGame instance.
+     * @param {Object|string} promotionMove - Legal pawn move to promote.
+     * @param {number} depth - Search depth in plies.
+     * @returns {'q'|'r'|'b'|'n'|null} Best promotion piece.
+     */
+    findBestPromote(game, promotionMove, depth = 2) {
+
+        const searchDepth = Math.max(1, Math.floor(Number(depth) || 1));
+        const color = game.turn;
+        const maximizing = color === 'w';
+
+        // Normalize the supplied promotion move.
+        const move = this._normalizeMove(promotionMove);
+
+        if (!move) {
+            return null;
+        }
+
+        const promotionPieces = ['q', 'r', 'b', 'n'];
+
+        let bestPromotion = null;
+        let bestScore = maximizing ? -Infinity : Infinity;
+
+        const promotionScores = {};
+
+        this.nodes = 0;
+
+        for (const promotion of promotionPieces) {
+            // Create a separate game state for each promotion.
+            const child = this.cloneGame(game);
+
+            // Apply the candidate promotion.
+            const candidateMove = {...move, promotion };
+
+            this._applyMove(child, candidateMove);
+
+            // Evaluate this promotion independently.
+            const score = this.minimax(
+                child,
+                searchDepth - 1,
+                -Infinity,
+                Infinity,
+                !maximizing,
+                1
+            );
+
+            promotionScores[promotion] = score;
+
+            if (
+                (maximizing && score > bestScore) ||
+                (!maximizing && score < bestScore)
+            ) { 
+                bestScore = score;
+                bestPromotion = promotion;
+            }
+        }
+
+        this.lastSearchStats = {
+            depth: searchDepth,
+            nodes: this.nodes,
+            score: bestScore,
+            bestMove: {
+                ...move,
+                promotion: bestPromotion
+            },
+            promotionScores
+        };
+
+        return bestPromotion;
+    }
+
 
     /**
      * Minimax with alpha-beta pruning.
