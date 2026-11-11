@@ -6,28 +6,9 @@ const DEFAULT_CASTLING = {
     b: { kingSide: true, queenSide: true }
 };
 
-/**
- * Positional chess evaluator and alpha-beta search.
- *
- * Expected ChessGame API:
- *   - game.board: 8 x 8 array; row 0 is rank 8, row 7 is rank 1.
- *   - game.turn: 'w' or 'b'.
- *   - game.getAllLegalMoves(color): returns an array of legal move objects.
- *
- * Preferred move shape:
- *   {
- *     from: { row: 6, col: 4 },
- *     to:   { row: 4, col: 4 },
- *     promotion: 'q' // optional: q, r, b, n
- *   }
- *
- * Also accepts [row, col] squares, {r, c}, {x, y}, algebraic squares
- * such as 'e2', and flat fromRow/fromCol/toRow/toCol properties.
- *
- * All evaluation scores are returned from White's perspective internally:
- * positive = White is better; negative = Black is better.
- */
-export class GameBrian {
+
+
+export class Bot {
     constructor(options = {}) {
         this.values = {
             p: 100,
@@ -195,7 +176,7 @@ export class GameBrian {
 
         return bestMove;
     }
-     
+
     /**
      * Find the best promotion piece for a pawn move.
      *
@@ -234,7 +215,7 @@ export class GameBrian {
             const child = this.cloneGame(game);
 
             // Apply the candidate promotion.
-            const candidateMove = {...move, promotion };
+            const candidateMove = { ...move, promotion };
 
             this._applyMove(child, candidateMove);
 
@@ -253,7 +234,7 @@ export class GameBrian {
             if (
                 (maximizing && score > bestScore) ||
                 (!maximizing && score < bestScore)
-            ) { 
+            ) {
                 bestScore = score;
                 bestPromotion = promotion;
             }
@@ -295,7 +276,7 @@ export class GameBrian {
             return 0; // Stalemate.
         }
 
-        if (this._isDraw(game)) return 0;
+        if (game.isDraw(game)) return 0;
 
         if (depth <= 0) {
             return this._quiescence(
@@ -908,19 +889,20 @@ export class GameBrian {
 
         const fromValue = move.from ?? move.start ?? move.source ??
             move.fromSquare ?? {
-                row: move.fromRow ?? move.startRow,
-                col: move.fromCol ?? move.startCol
-            };
+            row: move.fromRow ?? move.startRow,
+            col: move.fromCol ?? move.startCol
+        };
         const toValue = move.to ?? move.end ?? move.target ??
             move.toSquare ?? {
-                row: move.toRow ?? move.endRow,
-                col: move.toCol ?? move.endCol
-            };
+            row: move.toRow ?? move.endRow,
+            col: move.toCol ?? move.endCol
+        };
 
         const from = this._parseSquare(fromValue);
         const to = this._parseSquare(toValue);
 
         if (!from || !to) {
+            console.log(move)
             throw new Error(`Could not read move coordinates: ${JSON.stringify(move)}`);
         }
 
@@ -1103,7 +1085,7 @@ export class GameBrian {
 
         // Update repetition tracking if this ChessGame implementation uses it.
         if (game.positionCounts instanceof Map) {
-            const key = this._positionKey(game);
+            const key = game.positionKey(game);
             game.positionCounts.set(key, (game.positionCounts.get(key) ?? 0) + 1);
         }
 
@@ -1243,7 +1225,7 @@ export class GameBrian {
             return 0;
         }
 
-        if (this._isDraw(game)) return 0;
+        if (game.isDraw(game)) return 0;
 
         const standPat = this.evaluate(game.board, 'w');
 
@@ -1323,79 +1305,6 @@ export class GameBrian {
         if (!whiteKing) return -this.MATE_SCORE + ply;
         if (!blackKing) return this.MATE_SCORE - ply;
         return null;
-    }
-
-    _isDraw(game) {
-        if (Number.isFinite(game.halfMoveClock) && game.halfMoveClock >= 100) {
-            return true;
-        }
-
-        if (game.positionCounts instanceof Map) {
-            const key = this._positionKey(game);
-            if ((game.positionCounts.get(key) ?? 0) >= 3) return true;
-        }
-
-        return this._isInsufficientMaterial(game.board);
-    }
-
-    _isInsufficientMaterial(board) {
-        const nonKings = [];
-
-        for (let row = 0; row < 8; row++) {
-            for (let col = 0; col < 8; col++) {
-                const piece = board[row][col];
-                if (piece && piece.type !== 'k') {
-                    // Any pawn, rook or queen means mating material may exist.
-                    if (['p', 'r', 'q'].includes(piece.type)) return false;
-                    nonKings.push({ ...piece, row, col });
-                }
-            }
-        }
-
-        if (nonKings.length === 0) return true; // K vs K.
-        if (nonKings.length === 1) return true;  // K+B vs K or K+N vs K.
-
-        // Bishops only: if every bishop is on the same square colour,
-        // checkmate is impossible.
-        if (nonKings.every(piece => piece.type === 'b')) {
-            const squareColors = new Set(
-                nonKings.map(piece => (piece.row + piece.col) % 2)
-            );
-            if (squareColors.size === 1) return true;
-        }
-
-        return false;
-    }
-
-    _positionKey(game) {
-        if (typeof game.getPositionKey === 'function') {
-            try {
-                return game.getPositionKey(
-                    game.board,
-                    game.turn,
-                    game.castling,
-                    game.enPassantSquare
-                );
-            } catch {
-                // Fall through to a local key if the method signature differs.
-            }
-        }
-
-        const pieces = game.board.map(row => row.map(piece => {
-            if (!piece) return '--';
-            return `${piece.color}${piece.type}`;
-        }).join('')).join('/');
-
-        const rights = game.castling ?? DEFAULT_CASTLING;
-        const castlingKey = ['w', 'b'].map(color => {
-            const side = rights[color] ?? {};
-            return `${side.kingSide ? 'K' : '-'}${side.queenSide ? 'Q' : '-'}`;
-        }).join('');
-
-        const ep = this._parseSquare(game.enPassantSquare);
-        const epKey = ep ? this.squareName(ep.row, ep.col) : '-';
-
-        return `${pieces} ${game.turn} ${castlingKey} ${epKey}`;
     }
 
     _assertGame(game) {

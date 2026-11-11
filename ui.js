@@ -9,7 +9,7 @@ export class ChessUI {
         this.undoBtn = document.getElementById('undo-btn');
         this.startBtn = document.getElementById('start-btn');
         this.modeSelector = document.getElementById('game-mode');
-
+        this.newGame = document.getElementById("new-btn");
         this.pieceSymbols = {
             w: { k: '♔', q: '♕', r: '♖', b: '♗', n: '♘', p: '♙' },
             b: { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' }
@@ -90,5 +90,115 @@ export class ChessUI {
 
     updateBlackLabel(mode) {
         this.blackLabelElement.textContent = mode === 'ai' ? 'Black (Brian AI)' : 'Black (Player 2)';
+    }
+
+    renderDialog(color, onSelect){
+        const piecesOption =
+        color === "w"
+            ? [
+                { type: "q", icon: "♕", name: "Queen" },
+                { type: "r", icon: "♖", name: "Rook" },
+                { type: "b", icon: "♗", name: "Bishop" },
+                { type: "n", icon: "♘", name: "Knight" },
+            ]
+            : [
+                { type: "q", icon: "♛", name: "Queen" },
+                { type: "r", icon: "♜", name: "Rook" },
+                { type: "b", icon: "♝", name: "Bishop" },
+                { type: "n", icon: "♞", name: "Knight" },
+            ];
+
+    const modal = document.createElement("div");
+    modal.id = "promotion-modal";
+    modal.className = "promotion-overlay";
+
+    modal.innerHTML = `
+            <style>
+                .promotion-overlay {
+                    position: fixed;
+                    inset: 0;
+                    background: rgba(0, 0, 0, 0.7);
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    z-index: 10000;
+                }
+
+                .promotion-dialog {
+                    background: #fff;
+                    padding: 25px;
+                    border-radius: 12px;
+                    text-align: center;
+                    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+                }
+
+                .promotion-dialog h3 {
+                    margin: 0 0 20px;
+                    color: #222;
+                }
+
+                .promotion-options {
+                    display: flex;
+                    gap: 12px;
+                }
+
+                .promotion-piece {
+                    width: 75px;
+                    height: 90px;
+                    border: 1px solid #ddd;
+                    border-radius: 8px;
+                    background: #f7f7f7;
+                    cursor: pointer;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 5px;
+                }
+
+                .promotion-piece:hover {
+                    background: #e5e5e5;
+                    border-color: #888;
+                }
+
+                .promotion-piece span {
+                    font-size: 42px;
+                    line-height: 1;
+                }
+
+                .promotion-piece small {
+                    font-size: 12px;
+                    color: #333;
+                }
+            </style>
+            <div class="promotion-dialog">
+                <h3>Choose Your Promotion</h3>
+                <div class="promotion-options">
+                    ${piecesOption
+            .map(
+                (piece) => `
+                        <button
+                            class="promotion-piece"
+                            data-piece="${piece.type}"
+                            aria-label="Promote to ${piece.name}"
+                            title="${piece.name}"
+                        >
+                            <span>${piece.icon}</span>
+                            <small>${piece.name}</small>
+                        </button>
+                    `,
+            )
+            .join("")}
+                </div>
+            </div>
+        `;
+
+    modal.querySelectorAll(".promotion-piece").forEach((button) => {
+        button.addEventListener("click", () => {
+            onSelect(button.dataset.piece);
+            hidePromotionDialog();
+        });
+    });
+    document.body.appendChild(modal);
     }
 }

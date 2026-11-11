@@ -35,7 +35,7 @@ export class ChessGame {
         this.enPassantSquare = null;
         this.history = [];
         this.moveHistoryNotation = [];
-        
+
         // Repetition tracking maps
         this.positionCounts = new Map();
         const initialKey = this.getPositionKey(this.board, this.turn, this.castling, this.enPassantSquare);
@@ -104,7 +104,7 @@ export class ChessGame {
         if (piece.type === 'p') {
             const dir = color === 'w' ? -1 : 1;
             const startRow = color === 'w' ? 6 : 1;
-            
+
             const r1 = row + dir;
             if (r1 >= 0 && r1 < 8 && !board[r1][col]) {
                 const isPromo = (color === 'w' && r1 === 0) || (color === 'b' && r1 === 7);
@@ -263,6 +263,27 @@ export class ChessGame {
         this.history.push(prevState);
 
         const capturedPiece = this.board[toRow][toCol];
+        // Capturing a rook on its original square removes its castling right.
+        if (capturedPiece?.type === 'r') {
+            if (capturedPiece.color === 'w') {
+                if (toRow === 7 && toCol === 0) {
+                    this.castling.w.queenSide = false;
+                }
+
+                if (toRow === 7 && toCol === 7) {
+                    this.castling.w.kingSide = false;
+                }
+            } else {
+                if (toRow === 0 && toCol === 0) {
+                    this.castling.b.queenSide = false;
+                }
+
+                if (toRow === 0 && toCol === 7) {
+                    this.castling.b.kingSide = false;
+                }
+            }
+        }
+        
         let notation = this.getAlgebraicNotation(fromRow, fromCol, toRow, toCol, piece, capturedPiece, moveInfo);
 
         this.board[toRow][toCol] = piece;
@@ -406,4 +427,86 @@ export class ChessGame {
         }
         return allMoves;
     }
+
+    isDraw(game) {
+        // Automatic 75-move rule.
+        if ( Number.isFinite(game.halfMoveClock) && game.halfMoveClock >= 150 ) return true;
+
+        // Automatic fivefold repetition.
+        if (this.positionCounts instanceof Map) {
+            const key = this.positionKey(game);
+            const repetitions = this.positionCounts.get(key) ?? 0;
+
+            if (repetitions >= 5) {
+                return true;
+            }
+        }
+
+        // Insufficient mating material.
+        return this.isInsufficientMaterial(game.board);
+    }
+
+    
+
+    isInsufficientMaterial(board) {
+        const nonKings = [];
+
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                const piece = board[row][col];
+                if (piece && piece.type !== 'k') {
+                    // Any pawn, rook or queen means mating material may exist.
+                    if (['p', 'r', 'q'].includes(piece.type)) return false;
+                    nonKings.push({ ...piece, row, col });
+                }
+            }
+        }
+
+        if (nonKings.length === 0) return true; // K vs K.
+        if (nonKings.length === 1) return true;  // K+B vs K or K+N vs K.
+
+        // Bishops only: if every bishop is on the same square colour,
+        // checkmate is impossible.
+        if (nonKings.every(piece => piece.type === 'b')) {
+            const squareColors = new Set(
+                nonKings.map(piece => (piece.row + piece.col) % 2)
+            );
+            if (squareColors.size === 1) return true;
+        }
+
+        return false;
+    }
+
+
+     positionKey(game) {
+        if (typeof game.getPositionKey === 'function') {
+            try {
+                return game.getPositionKey(
+                    game.board,
+                    game.turn,
+                    game.castling,
+                    game.enPassantSquare
+                );
+            } catch {
+                // Fall through to a local key if the method signature differs.
+            }
+        }
+
+        const pieces = game.board.map(row => row.map(piece => {
+            if (!piece) return '--';
+            return `${piece.color}${piece.type}`;
+        }).join('')).join('/');
+
+        const rights = game.castling ?? DEFAULT_CASTLING;
+        const castlingKey = ['w', 'b'].map(color => {
+            const side = rights[color] ?? {};
+            return `${side.kingSide ? 'K' : '-'}${side.queenSide ? 'Q' : '-'}`;
+        }).join('');
+
+        const ep = this._parseSquare(game.enPassantSquare);
+        const epKey = ep ? this.squareName(ep.row, ep.col) : '-';
+
+        return `${pieces} ${game.turn} ${castlingKey} ${epKey}`;
+    }
+
 }
