@@ -11,6 +11,7 @@ class GameManager {
         // this.levels = new Level(64,4)
         this.gameStarted = false;
         this.gameOver = false;
+        this.gamePaused = false;
         this.selectedSquare = null;
         this.legalMoves = [];
         this.gameMode = "bot";
@@ -27,12 +28,14 @@ class GameManager {
             this.handleBoardClick(e),
         );
         this.ui.startBtn.addEventListener("click", () => this.startGame());
+        this.ui.pauseBtn.addEventListener("click", () => this.pauseGame());
         this.ui.undoBtn.addEventListener("click", () => this.undoMove());
         this.ui.newGame.addEventListener("click", () => this.newGame());
         this.ui.modeSelector.addEventListener("change", (e) => {
             this.gameMode = e.target.value;
             this.ui.updateBlackLabel(this.gameMode);
         });
+        this.ui.pauseBtn.disabled = true;
     }
 
 
@@ -42,6 +45,7 @@ class GameManager {
         this.gameStarted = false;
         this.gameOver = false;
         this.selectedSquare = null;
+        this.ui.pauseBtn.disabled = true;
         this.legalMoves = [];
         this.whiteTime = 600;
         this.blackTime = 600;
@@ -64,12 +68,29 @@ class GameManager {
         this.ui.modeSelector.disabled = true;
         this.ui.renderStatus("White's turn");
         this.startTimers();
+        this.ui.pauseBtn.disabled = false;
+        if(this.gameMode === "train") this.makebotMove();
+
     }
 
+    pauseGame() {
+        this.gamePaused = !this.gamePaused;
+        if(!this.gamePaused) {
+            this.ui.pauseBtn.textContent = "Pause Game";
+
+            console.log(this.gameMode === "bot", this.game.turn === "b", )
+            if(this.gameMode === "bot" && this.game.turn === "b" || this.gameMode === "train" ) {
+                this.makebotMove();
+                console.log("Making move")
+            }
+            return
+        }
+        this.ui.pauseBtn.textContent = "Resume Game";
+    }
     startTimers() {
         clearInterval(this.timerInterval);
         this.timerInterval = setInterval(() => {
-            if (this.gameOver || !this.gameStarted) return;
+            if (this.gamePaused || this.gameOver || !this.gameStarted) return;
             if (this.game.turn === "w") {
                 if (this.whiteTime > 0) this.whiteTime--;
                 if (this.whiteTime === 0) {
@@ -81,12 +102,12 @@ class GameManager {
                     this.endGame("Time out! White wins!");
                 }
             }
-            this.ui.renderTimers(this.whiteTime, this.blackTime);
+            this.ui.renderTimers(this.whiteTime, this.blackTime); 
         }, 1000);
     }
 
     handleBoardClick(e) {
-        if (!this.gameStarted || this.gameOver) return;
+        if (!this.gameStarted || this.gameOver ) return;
         if (this.gameMode=== "train" || this.gameMode === "bot" && this.game.turn === "b") return;
 
         const squareEl = e.target.closest(".square");
@@ -164,8 +185,10 @@ class GameManager {
     }
 
     executeMove(fromRow, fromCol, toRow, toCol, promotionPiece = "q") {
+        if(this.gameOver || this.gamePaused) return
+        
         const validPieces = ["q", "r", "b", "n"];
-
+        
         if (!validPieces.includes(promotionPiece)) promotionPiece = "q";
         if (this.game.makeMove(fromRow, fromCol, toRow, toCol, promotionPiece)) {
             const drawResult = this.game.isDraw(this.game);
@@ -181,7 +204,8 @@ class GameManager {
             this.ui.renderHistory(this.game.moveHistoryNotation);
             this.ui.undoBtn.disabled = false;
 
-            const currTurn = this.game.turn;
+            const currTurn = this.game.turn;            
+
             if (this.game.isCheckmate(currTurn)) {
                 const winner = currTurn === "w" ? "Black" : "White";
                 this.endGame(`Checkmate! ${winner} wins!`);
@@ -199,15 +223,20 @@ class GameManager {
                 );
             }
 
-            if (this.gameMode === "bot" && this.game.turn === "b" && !this.gameOver) {
-                setTimeout(() => this.makebotMove(), 400);
+            if (this.gameMode === "train") {
+                setTimeout(() => this.makebotMove(), 1500);
+            }
+            
+            if (this.gameMode === "bot" && this.game.turn === "b") {
+                setTimeout(() => this.makebotMove(), 1000);
             }
         }
     }
 
     makebotMove() {
-        if (this.gameOver) return;
+        if (this.gameOver || this.gamePaused ) return;
         const botMove = this.bot.findBestMove(this.game, 2);
+
         if (botMove) {
             this.executeMove(
                 botMove.fromRow,

@@ -8,6 +8,7 @@ export class ChessUI {
         this.blackLabelElement = document.getElementById('black-label');
         this.undoBtn = document.getElementById('undo-btn');
         this.startBtn = document.getElementById('start-btn');
+        this.pauseBtn = document.getElementById('pause-btn');
         this.modeSelector = document.getElementById('game-mode');
         this.newGame = document.getElementById("new-btn");
         this.pieceSymbols = {
