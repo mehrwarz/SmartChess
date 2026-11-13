@@ -14,7 +14,7 @@ export class Bot {
       b: 330,
       r: 500,
       q: 900,
-      k: 20000,
+      k: 2000,
     };
 
     this.MATE_SCORE = options.mateScore ?? 1000000;
@@ -31,6 +31,15 @@ export class Bot {
 
     this.nodes = 0;
     this.lastSearchStats = null;
+
+    this.transpositionTable = new Map();
+    this.maxTableSize = options.maxTableSize ?? 200000;
+    this.maxSearchTime = options.maxSearchTime ?? 2000;
+
+    this.searchDeadline = 0;
+    this.searchAborted = false;
+    this.ttHits = 0;
+    this.cutoffs = 0;
   }
 
   // ================================================================
@@ -114,68 +123,147 @@ export class Bot {
    * Return the best legal move for game.turn.
    * depth is measured in plies (one individual move by either side).
    */
-  findBestMove(game, depth = 2) {
+  findBestMove(game, depth = 4) {
     this._assertGame(game);
 
-    const searchDepth = Math.max(1, Math.floor(Number(depth) || 1));
-
+    const maxDepth = Math.max(1, Math.floor(Number(depth) || 1));
     const legalMoves = game.getAllLegalMoves(game.turn);
 
-    if (!Array.isArray(legalMoves) || legalMoves.length === 0) {
+    if (!legalMoves?.length) {
       this.lastSearchStats = {
-        depth: searchDepth,
+        depth: 0,
         nodes: 0,
         score: null,
         bestMove: null,
       };
-
       return null;
     }
 
     this.nodes = 0;
+    this.ttHits = 0;
+    this.cutoffs = 0;
 
-    // Always use the actual player whose turn it is.
+    this.searchDeadline = Date.now() + this.maxSearchTime;
+    this.searchAborted = false;
+
+    this.transpositionTable.clear();
+
+    let bestMove = legalMoves[0];
+    let bestScore = game.turn === "w" ? -Infinity : Infinity;
+    let completedDepth = 0;
+
+    for (let currentDepth = 1; currentDepth <= maxDepth; currentDepth++) {
+      try {
+        this._checkSearchTime();
+
+        const result = this._searchRoot(game, currentDepth);
+
+        bestMove = result.move;
+        bestScore = result.score;
+        completedDepth = currentDepth;
+      } catch (error) {
+        if (error !== this._searchAbortError) {
+          throw error;
+        }
+
+        this.searchAborted = true;
+        break;
+      }
+    }
+
+    this.lastSearchStats = {
+      depth: completedDepth,
+      requestedDepth: maxDepth,
+      nodes: this.nodes,
+      transpositionHits: this.ttHits,
+      cutoffs: this.cutoffs,
+      score: bestScore,
+      bestMove,
+      timedOut: this.searchAborted,
+      tableSize: this.transpositionTable.size,
+    };
+
+    return bestMove;
+  }
+
+  _searchAbortError = new Error("Search time limit reached");
+
+  _checkSearchTime() {
+    if (Date.now() >= this.searchDeadline) {
+      throw this._searchAbortError;
+    }
+  }
+
+  _searchRoot(game, depth) {
     const maximizing = game.turn === "w";
+    const moves = this._orderMoves(game, game.getAllLegalMoves(game.turn));
 
-    const orderedMoves = this._orderMoves(game, legalMoves);
-
-    let bestMove = orderedMoves[0].move;
+    let bestMove = moves[0].move;
     let bestScore = maximizing ? -Infinity : Infinity;
 
     let alpha = -Infinity;
     let beta = Infinity;
 
-    for (const item of orderedMoves) {
+    for (const item of moves) {
+      this._checkSearchTime();
+
       const child = this.cloneGame(game);
       this._applyMove(child, item.move);
 
-      const score = this.minimax(child, searchDepth - 1, alpha, beta, 1);
+      const score = this.minimax(child, depth - 1, alpha, beta, 1);
+
+      if (
+        (maximizing && score > bestScore) ||
+        (!maximizing && score < bestScore)
+      ) {
+        bestScore = score;
+        bestMove = item.move;
+      }
 
       if (maximizing) {
-        if (score > bestScore) {
-          bestScore = score;
-          bestMove = item.move;
-        }
-
         alpha = Math.max(alpha, bestScore);
       } else {
-        if (score < bestScore) {
-          bestScore = score;
-          bestMove = item.move;
-        }
-
         beta = Math.min(beta, bestScore);
       }
     }
 
-    this.lastSearchStats = {
-      depth: searchDepth,
-      nodes: this.nodes,
-      score: bestScore,
-      bestMove,
-    };
+    return { move: bestMove, score: bestScore };
+  }
 
-    return bestMove;
+  _positionKey(game) {
+    const boardKey = game.board
+      .map((row) =>
+        row
+          .map((piece) => (piece ? `${piece.color}${piece.type}` : "--"))
+          .join(""),
+      )
+      .join("/");
+
+    const castling = game.castling ?? DEFAULT_CASTLING;
+    const ep = game.enPassantSquare;
+
+    return [
+      boardKey,
+      game.turn,
+      castling.w.kingSide ? 1 : 0,
+      castling.w.queenSide ? 1 : 0,
+      castling.b.kingSide ? 1 : 0,
+      castling.b.queenSide ? 1 : 0,
+      ep ? `${ep.row},${ep.col}` : "-",
+      game.halfMoveClock ?? 0,
+    ].join("|");
+  }
+
+  _storeTT(key, entry) {
+    if (this.transpositionTable.size >= this.maxTableSize) {
+      // Simple bounded-cache policy.
+      const firstKey = this.transpositionTable.keys().next().value;
+      if (firstKey !== undefined) {
+        this.transpositionTable.delete(firstKey);
+      }
+    }
+
+    this.transpositionTable.set(key, entry);
   }
 
   /**
@@ -260,16 +348,42 @@ export class Bot {
    */
   minimax(game, depth, alpha, beta, ply = 0) {
     this.nodes++;
+    this._checkSearchTime();
 
-    const terminalKingScore = this._missingKingScore(game.board, ply);
+    const terminal = this._missingKingScore(game.board, ply);
+    if (terminal !== null) return terminal;
 
-    if (terminalKingScore !== null) {
-      return terminalKingScore;
+    // Draw detection must happen before using a cached score.
+    if (game.isDraw(game)) return 0;
+
+    const originalAlpha = alpha;
+    const originalBeta = beta;
+
+    const key = this._positionKey(game);
+    const cached = this.transpositionTable.get(key);
+
+    let ttMove = null;
+
+    if (cached) {
+      ttMove = cached.bestMove;
+      this.ttHits++;
+
+      if (cached.depth >= depth) {
+        if (cached.flag === "EXACT") return cached.score;
+
+        if (cached.flag === "LOWER") {
+          alpha = Math.max(alpha, cached.score);
+        } else if (cached.flag === "UPPER") {
+          beta = Math.min(beta, cached.score);
+        }
+
+        if (alpha >= beta) return cached.score;
+      }
     }
 
     const legalMoves = game.getAllLegalMoves(game.turn);
 
-    if (!Array.isArray(legalMoves) || legalMoves.length === 0) {
+    if (!legalMoves?.length) {
       if (this.isKingInCheck(game.board, game.turn)) {
         return game.turn === "w"
           ? -this.MATE_SCORE + ply
@@ -279,54 +393,85 @@ export class Bot {
       return 0;
     }
 
-    if (game.isDraw(game)) return 0;
-
     if (depth <= 0) {
       return this._quiescence(game, alpha, beta, ply, this.quiescenceDepth);
     }
 
-    // THIS IS THE IMPORTANT PART:
-    // Determine the player from the current position,
-    // not from the original game position.
     const maximizing = game.turn === "w";
 
     const orderedMoves = this._orderMoves(game, legalMoves);
 
-    if (maximizing) {
-      let best = -Infinity;
+    // Search the previously preferred move first.
+    if (ttMove) {
+      const ttKey = this._moveKey(ttMove);
 
-      for (const item of orderedMoves) {
-        const child = this.cloneGame(game);
+      orderedMoves.sort((a, b) => {
+        const aMatch = this._moveKey(a.move) === ttKey;
+        const bMatch = this._moveKey(b.move) === ttKey;
 
-        this._applyMove(child, item.move);
-
-        const score = this.minimax(child, depth - 1, alpha, beta, ply + 1);
-
-        best = Math.max(best, score);
-        alpha = Math.max(alpha, best);
-
-        if (alpha >= beta) break;
-      }
-
-      return best;
+        return Number(bMatch) - Number(aMatch);
+      });
     }
 
-    let best = Infinity;
+    let best = maximizing ? -Infinity : Infinity;
+    let bestMove = null;
 
     for (const item of orderedMoves) {
-      const child = this.cloneGame(game);
+      this._checkSearchTime();
 
+      const child = this.cloneGame(game);
       this._applyMove(child, item.move);
 
       const score = this.minimax(child, depth - 1, alpha, beta, ply + 1);
 
-      best = Math.min(best, score);
-      beta = Math.min(beta, best);
+      if ((maximizing && score > best) || (!maximizing && score < best)) {
+        best = score;
+        bestMove = item.move;
+      }
 
-      if (alpha >= beta) break;
+      if (maximizing) {
+        alpha = Math.max(alpha, best);
+      } else {
+        beta = Math.min(beta, best);
+      }
+
+      if (alpha >= beta) {
+        this.cutoffs++;
+        break;
+      }
+    }
+
+    // Do not cache mate scores without normalizing their ply distance.
+    if (Math.abs(best) < this.MATE_SCORE - 10000) {
+      let flag = "EXACT";
+
+      if (best <= originalAlpha) {
+        flag = "UPPER";
+      } else if (best >= originalBeta) {
+        flag = "LOWER";
+      }
+
+      this._storeTT(key, {
+        depth,
+        score: best,
+        flag,
+        bestMove,
+      });
     }
 
     return best;
+  }
+
+  _moveKey(move) {
+    const info = this._normalizeMove(move);
+
+    return [
+      info.from.row,
+      info.from.col,
+      info.to.row,
+      info.to.col,
+      info.promotion ?? "",
+    ].join(",");
   }
 
   /**
@@ -771,11 +916,8 @@ export class Bot {
     const pressure = this._kingPressure(board, color);
     const support = this._kingSupport(board, color);
 
-    // King support matters much more when the king is under real pressure.
-    // This helps a defensive developing move outrank a small free pawn
-    // opportunity when the king zone is becoming dangerous.
     const urgency =
-      pressure >= 90 ? 3.5 : pressure >= 45 ? 2.5 : pressure >= 20 ? 1.5 : 1.0;
+      pressure >= 90 ? 1.8 : pressure >= 45 ? 1.5 : pressure >= 20 ? 1.2 : 1.0;
 
     return support * urgency - pressure;
   }
@@ -1262,31 +1404,38 @@ export class Bot {
 
   _quiescence(game, alpha, beta, ply, remaining) {
     this.nodes++;
+    this._checkSearchTime();
 
-    const terminalKingScore = this._missingKingScore(game.board, ply);
-    if (terminalKingScore !== null) return terminalKingScore;
+    const terminal = this._missingKingScore(game.board, ply);
 
-    const side = game.turn;
-    const inCheck = this.isKingInCheck(game.board, side);
-    const legalMoves = game.getAllLegalMoves(side);
-
-    if (!Array.isArray(legalMoves) || legalMoves.length === 0) {
-      if (inCheck) {
-        return side === "w" ? -this.MATE_SCORE + ply : this.MATE_SCORE - ply;
-      }
-      return 0;
-    }
+    if (terminal !== null) return terminal;
 
     if (game.isDraw(game)) return 0;
 
-    const standPat = this.evaluate(game.board, "w");
+    const side = game.turn;
+    const inCheck = this.isKingInCheck(game.board, side);
 
-    // Avoid unbounded check extensions. At this emergency cap, use the
-    // static score; the main search still handles checkmate at its nodes.
-    if (remaining <= -2) return standPat;
+    const legalMoves = game.getAllLegalMoves(side);
 
+    // Checkmate or stalemate.
+    if (!legalMoves || legalMoves.length === 0) {
+      if (inCheck) {
+        return side === "w" ? -this.MATE_SCORE + ply : this.MATE_SCORE - ply;
+      }
+
+      return 0;
+    }
+
+    // Never stand pat while in check.
+    const maximizing = side === "w";
+
+    const MAX_QUIESCENCE_PLY = 12;
+
+    // If not in check, evaluate the current position.
     if (!inCheck) {
-      if (side === "w") {
+      const standPat = this.evaluate(game.board, "w");
+
+      if (maximizing) {
         if (standPat >= beta) return beta;
         alpha = Math.max(alpha, standPat);
       } else {
@@ -1294,9 +1443,17 @@ export class Bot {
         beta = Math.min(beta, standPat);
       }
 
-      if (remaining <= 0) return standPat;
+      if (remaining <= 0 || ply >= MAX_QUIESCENCE_PLY) {
+        return standPat;
+      }
+    } else if (ply >= MAX_QUIESCENCE_PLY) {
+      // Do not return a static evaluation while in check.
+      // Resolve the check at least one ply further.
+      remaining = Math.max(remaining, 1);
     }
 
+    // When in check, every legal evasion must be considered.
+    // Otherwise, only tactical moves are searched.
     const candidateMoves = inCheck
       ? legalMoves
       : legalMoves.filter(
@@ -1305,36 +1462,21 @@ export class Bot {
             this._isPromotionMove(game, move),
         );
 
-    if (candidateMoves.length === 0) return standPat;
+    if (candidateMoves.length === 0) {
+      return inCheck ? 0 : this.evaluate(game.board, "w");
+    }
 
     const orderedMoves = this._orderMoves(game, candidateMoves);
 
-    if (side === "w") {
-      let best = inCheck ? -Infinity : standPat;
-
-      for (const item of orderedMoves) {
-        const child = this.cloneGame(game);
-        this._applyMove(child, item.move);
-
-        const score = this._quiescence(
-          child,
-          alpha,
-          beta,
-          ply + 1,
-          remaining - 1,
-        );
-
-        best = Math.max(best, score);
-        alpha = Math.max(alpha, best);
-        if (alpha >= beta) break;
-      }
-
-      return best;
-    }
-
-    let best = inCheck ? Infinity : standPat;
+    let best = inCheck
+      ? maximizing
+        ? -Infinity
+        : Infinity
+      : this.evaluate(game.board, "w");
 
     for (const item of orderedMoves) {
+      this._checkSearchTime();
+
       const child = this.cloneGame(game);
       this._applyMove(child, item.move);
 
@@ -1346,9 +1488,18 @@ export class Bot {
         remaining - 1,
       );
 
-      best = Math.min(best, score);
-      beta = Math.min(beta, best);
-      if (alpha >= beta) break;
+      if (maximizing) {
+        best = Math.max(best, score);
+        alpha = Math.max(alpha, best);
+      } else {
+        best = Math.min(best, score);
+        beta = Math.min(beta, best);
+      }
+
+      if (alpha >= beta) {
+        this.cutoffs++;
+        break;
+      }
     }
 
     return best;
