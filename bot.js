@@ -31,11 +31,9 @@ export class Bot {
 
     this.nodes = 0;
     this.lastSearchStats = null;
-
     this.transpositionTable = new Map();
     this.maxTableSize = options.maxTableSize ?? 200000;
     this.maxSearchTime = options.maxSearchTime ?? 2000;
-
     this.searchDeadline = 0;
     this.searchAborted = false;
     this.ttHits = 0;
@@ -66,15 +64,18 @@ export class Bot {
 
     const whiteKing = this.findKing(board, "w");
     const blackKing = this.findKing(board, "b");
+
     if (!whiteKing && !blackKing) {
       return { material: 0, X: 0, Y: 0, Z: 0, total: 0 };
     }
+
     if (!whiteKing) {
       const total = -this.MATE_SCORE;
       return perspective === "w"
         ? { material: 0, X: 0, Y: 0, Z: 0, total }
         : { material: 0, X: 0, Y: 0, Z: 0, total: -total };
     }
+
     if (!blackKing) {
       const total = this.MATE_SCORE;
       return perspective === "w"
@@ -142,10 +143,8 @@ export class Bot {
     this.nodes = 0;
     this.ttHits = 0;
     this.cutoffs = 0;
-
     this.searchDeadline = Date.now() + this.maxSearchTime;
     this.searchAborted = false;
-
     this.transpositionTable.clear();
 
     let bestMove = legalMoves[0];
@@ -165,7 +164,6 @@ export class Bot {
         if (error !== this._searchAbortError) {
           throw error;
         }
-
         this.searchAborted = true;
         break;
       }
@@ -182,7 +180,6 @@ export class Bot {
       timedOut: this.searchAborted,
       tableSize: this.transpositionTable.size,
     };
-
     return bestMove;
   }
 
@@ -200,7 +197,6 @@ export class Bot {
 
     let bestMove = moves[0].move;
     let bestScore = maximizing ? -Infinity : Infinity;
-
     let alpha = -Infinity;
     let beta = Infinity;
 
@@ -231,13 +227,11 @@ export class Bot {
   }
 
   _positionKey(game) {
-    const boardKey = game.board
-      .map((row) =>
-        row
-          .map((piece) => (piece ? `${piece.color}${piece.type}` : "--"))
-          .join(""),
-      )
-      .join("/");
+    const boardKey = game.board.map(
+        (row) => row.map((piece) => (
+            piece ? `${piece.color}${piece.type}` : "--"
+        )).join("")
+      ).join("/");
 
     const castling = game.castling ?? DEFAULT_CASTLING;
     const ep = game.enPassantSquare;
@@ -290,10 +284,8 @@ export class Bot {
     }
 
     const promotionPieces = ["q", "r", "b", "n"];
-
     let bestPromotion = null;
     let bestScore = maximizing ? -Infinity : Infinity;
-
     const promotionScores = {};
 
     this.nodes = 0;
@@ -308,14 +300,7 @@ export class Bot {
       this._applyMove(child, candidateMove);
 
       // Evaluate this promotion independently.
-      const score = this.minimax(
-        child,
-        searchDepth - 1,
-        -Infinity,
-        Infinity,
-        !maximizing,
-        1,
-      );
+      const score = this.minimax(child, searchDepth - 1, -Infinity, Infinity, !maximizing, 1);
 
       promotionScores[promotion] = score;
 
@@ -358,10 +343,8 @@ export class Bot {
 
     const originalAlpha = alpha;
     const originalBeta = beta;
-
     const key = this._positionKey(game);
     const cached = this.transpositionTable.get(key);
-
     let ttMove = null;
 
     if (cached) {
@@ -370,13 +353,11 @@ export class Bot {
 
       if (cached.depth >= depth) {
         if (cached.flag === "EXACT") return cached.score;
-
         if (cached.flag === "LOWER") {
           alpha = Math.max(alpha, cached.score);
         } else if (cached.flag === "UPPER") {
           beta = Math.min(beta, cached.score);
         }
-
         if (alpha >= beta) return cached.score;
       }
     }
@@ -398,7 +379,6 @@ export class Bot {
     }
 
     const maximizing = game.turn === "w";
-
     const orderedMoves = this._orderMoves(game, legalMoves);
 
     // Search the previously preferred move first.
@@ -408,7 +388,6 @@ export class Bot {
       orderedMoves.sort((a, b) => {
         const aMatch = this._moveKey(a.move) === ttKey;
         const bMatch = this._moveKey(b.move) === ttKey;
-
         return Number(bMatch) - Number(aMatch);
       });
     }
@@ -458,7 +437,6 @@ export class Bot {
         bestMove,
       });
     }
-
     return best;
   }
 
@@ -536,7 +514,6 @@ export class Bot {
         });
       }
     }
-
     return targets.sort((a, b) => b.priority - a.priority);
   }
 
@@ -548,8 +525,8 @@ export class Bot {
   staticExchangeEvaluation(board, move, enPassantSquare = null) {
     const info = this._normalizeMove(move);
     const movingPiece = board[info.from.row]?.[info.from.col];
-    if (!movingPiece) return 0;
 
+    if (!movingPiece) return 0;
     if (
       movingPiece.type === "k" &&
       Math.abs(info.to.col - info.from.col) === 2
@@ -559,15 +536,9 @@ export class Bot {
 
     const working = this.cloneBoard(board);
     const destinationPiece = working[info.to.row][info.to.col];
-    const isEnPassant = this._isEnPassantMove(
-      board,
-      info,
-      movingPiece,
-      enPassantSquare,
-      move,
-    );
-
+    const isEnPassant = this._isEnPassantMove(board, info, movingPiece, enPassantSquare, move );
     let capturedPiece = destinationPiece;
+
     if (isEnPassant) {
       capturedPiece = working[info.from.row][info.to.col];
       working[info.from.row][info.to.col] = null;
@@ -576,15 +547,11 @@ export class Bot {
     working[info.from.row][info.from.col] = null;
 
     const promotion = this._promotionType(move, movingPiece, info.to.row);
-    const placedPiece = promotion
-      ? { type: promotion, color: movingPiece.color }
-      : { ...movingPiece };
+    const placedPiece = promotion ? { type: promotion, color: movingPiece.color } : { ...movingPiece };
 
     working[info.to.row][info.to.col] = placedPiece;
 
-    const capturedValue = capturedPiece
-      ? (this.values[capturedPiece.type] ?? 0)
-      : 0;
+    const capturedValue = capturedPiece ? (this.values[capturedPiece.type] ?? 0) : 0;
     const promotionGain = promotion
       ? this.values[promotion] - this.values.p
       : 0;

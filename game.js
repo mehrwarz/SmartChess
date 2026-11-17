@@ -1,7 +1,6 @@
 import { ChessGame } from "./actions.js";
 import { Bot } from "./bot.js";
 import { ChessUI } from "./ui.js";
-import { NeuralNetwork, Level } from "./neuralNetwork.js";
 
 class GameManager {
   constructor() {
@@ -11,25 +10,16 @@ class GameManager {
       maxSearchTime: 1500,
       maxTableSize: 200000,
       quiescenceDepth: 4,
-
       developmentWeight: 1.0,
       kingSafetyWeight: 0.8,
       vulnerabilityWeight: 0.22,
       mobilityWeight: 0.65,
     });
-    this.botTimeout = null;
-    this.gameStarted = false;
-    this.gameOver = false;
-    this.gamePaused = false;
-    this.selectedSquare = null;
-    this.legalMoves = [];
-    this.gameMode = "bot";
-    this.whiteTime = 600;
-    this.blackTime = 600;
-    this.timerInterval = null;
+    this.moveSound = new Audio("/MoveSound.mp3");
+    this.gameOverSound = new Audio("/CheckMat.mp3");
+    this.checkSound = new Audio("/Check.mp3");
+    this.newGame();
     this.initListeners();
-    this.ui.renderBoard(this.game.board);
-    this.ui.updateBlackLabel(this.gameMode);
   }
 
   initListeners() {
@@ -55,20 +45,23 @@ class GameManager {
     this.selectedSquare = null;
     this.ui.pauseBtn.disabled = true;
     this.legalMoves = [];
-    this.whiteTime = 600;
-    this.blackTime = 600;
     this.ui.startBtn.textContent = "Start Game";
     this.ui.startBtn.disabled = false;
     this.ui.modeSelector.disabled = false;
     this.ui.undoBtn.disabled = true;
-    this.ui.renderTimers(this.whiteTime, this.blackTime);
-    this.ui.renderBoard(this.game.board);
-    this.ui.renderHistory(this.game.moveHistoryNotation);
-    this.ui.renderStatus("Welcome! Click 'Start Game'");
-    this.gamePaused = false;
+    this.whiteTime = 1200;
+    this.blackTime = 600;
     this.ui.pauseBtn.textContent = "Pause Game";
     clearTimeout(this.botTimeout);
     this.botTimeout = null;
+    this.gamePaused = false;
+    this.gameMode = "bot";
+    this.timerInterval = null;
+    this.ui.renderBoard(this.game.board);
+    this.ui.renderHistory(this.game.moveHistoryNotation);
+    this.ui.renderStatus("Welcome! Click 'Start Game'");
+    this.ui.renderTimers(this.whiteTime, this.blackTime);
+    this.ui.updateBlackLabel(this.gameMode);
   }
 
   startGame() {
@@ -92,8 +85,11 @@ class GameManager {
     if (!this.gamePaused) {
       this.ui.pauseBtn.textContent = "Pause Game";
       if (
-        (this.gameMode === "bot" && this.game.turn === "b") ||
-        this.gameMode === "train"
+          (
+            this.gameMode === "bot" 
+            && this.game.turn === "b"
+          ) 
+          || this.gameMode === "train"
       ) {
         this.makebotMove();
       }
@@ -214,6 +210,7 @@ class GameManager {
         this.gameOver = true;
         // Display the draw result in your game UI.
         this.ui.renderStatus(drawResult.message);
+        this.gameOverSound.play();
         return;
       }
 
@@ -226,11 +223,14 @@ class GameManager {
       if (this.game.isCheckmate(currTurn)) {
         const winner = currTurn === "w" ? "Black" : "White";
         this.endGame(`Checkmate! ${winner} wins!`);
+        this.gameOverSound.play();
         return;
       } else if (this.game.isStalemate(currTurn)) {
         this.endGame("Stalemate! It's a draw.");
+        this.gameOverSound.play();
         return;
       } else if (this.game.isInCheck(currTurn)) {
+        this.checkSound.play();
         this.ui.renderStatus(
           `${currTurn === "w" ? "White" : "Black"}'s turn - Check!`,
         );
@@ -247,6 +247,7 @@ class GameManager {
       if (this.gameMode === "bot" && this.game.turn === "b") {
         setTimeout(() => this.makebotMove(), 1000);
       }
+      this.moveSound.play();
     }
   }
 
