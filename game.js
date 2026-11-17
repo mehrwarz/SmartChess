@@ -18,7 +18,6 @@ class GameManager {
       mobilityWeight: 0.65,
     });
     this.botTimeout = null;
-    // this.levels = new Level(64,4)
     this.gameStarted = false;
     this.gameOver = false;
     this.gamePaused = false;
