@@ -11,6 +11,7 @@ export class ChessUI {
         this.pauseBtn = document.getElementById('pause-btn');
         this.modeSelector = document.getElementById('game-mode');
         this.newGame = document.getElementById("new-btn");
+        this.trainBtn = document.getElementById("train-btn")
         this.pieceSymbols = {
             w: { k: '♔', q: '♕', r: '♖', b: '♗', n: '♘', p: '♙' },
             b: { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' }

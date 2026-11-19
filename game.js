@@ -6,7 +6,7 @@ class GameManager {
   constructor() {
     this.game = new ChessGame();
     this.ui = new ChessUI();
-    this.brian = new NeuralNetwork([330, 256, 32, 4]);
+    this.brain = new NeuralNetwork();
     this.bot = new Bot({
       maxSearchTime: 1500,
       maxTableSize: 200000,
@@ -21,6 +21,7 @@ class GameManager {
     this.checkSound = new Audio("/Check.mp3");
     this.newGame();
     this.initListeners();
+    this.inputs = [];
   }
 
   initListeners() {
@@ -31,6 +32,7 @@ class GameManager {
     this.ui.pauseBtn.addEventListener("click", () => this.pauseGame());
     this.ui.undoBtn.addEventListener("click", () => this.undoMove());
     this.ui.newGame.addEventListener("click", () => this.newGame());
+    this.ui.trainBtn.addEventListener("click", () => this.startTraining());
     this.ui.modeSelector.addEventListener("change", (e) => {
       this.gameMode = e.target.value;
       this.ui.updateBlackLabel(this.gameMode);
@@ -86,11 +88,8 @@ class GameManager {
     if (!this.gamePaused) {
       this.ui.pauseBtn.textContent = "Pause Game";
       if (
-          (
-            this.gameMode === "bot" 
-            && this.game.turn === "b"
-          ) 
-          || this.gameMode === "train"
+        (this.gameMode === "bot" && this.game.turn === "b") ||
+        this.gameMode === "train"
       ) {
         this.makebotMove();
       }
@@ -300,6 +299,11 @@ class GameManager {
     clearInterval(this.timerInterval);
     this.ui.renderStatus(message);
     this.ui.undoBtn.disabled = true;
+  }
+
+  startTraining() {
+    this.inputs = this.brain.startLearning();
+    console.log(this.inputs);
   }
 }
 
