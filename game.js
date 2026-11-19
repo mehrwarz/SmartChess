@@ -1,11 +1,12 @@
 import { ChessGame } from "./actions.js";
 import { Bot } from "./bot.js";
 import { ChessUI } from "./ui.js";
-
+import { NeuralNetwork } from "./neuralNetwork.js";
 class GameManager {
   constructor() {
     this.game = new ChessGame();
     this.ui = new ChessUI();
+    this.brian = new NeuralNetwork([330, 256, 32, 4]);
     this.bot = new Bot({
       maxSearchTime: 1500,
       maxTableSize: 200000,

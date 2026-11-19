@@ -1,9 +1,8 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-
 const PORT = 5500;
-const HOST = '10.120.10.8';
+const HOST = 'localhost';
 
 // Map file extensions to correct MIME types (critical for ES6 modules)
 const MIME_TYPES = {
