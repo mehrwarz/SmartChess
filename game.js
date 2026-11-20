@@ -301,11 +301,27 @@ class GameManager {
   }
 
   startTraining() {
+    const turn = "w"
     const whiteBrain = new NeuralNetwork([277, 114, 54, 4]);
-    const blackBrain = new NeuralNetwork([277, 114, 54, 4]);
+    const blackBrain = whiteBrain.clone();
+    blackBrain.mutate(whiteBrain, 0.01);
 
     this.inputs = initBoard();
-    console.log(this.inputs);
+
+    const whiteOutput = whiteBrain.predict(this.inputs);
+    const blackOutput = blackBrain.predict(this.inputs);
+
+    console.log(whiteOutput, blackOutput);
+
+    if(turn === "w"){
+      this.executeMove(whiteOutput);
+      this.inputs[276] = 1;
+    }
+    else {
+      this.executeMove(blackOutput);
+      this.inputs[276] = 0;
+    }
+    // const squareIndex = (row * 8 + col) * 4
   }
 }
 

@@ -69,14 +69,8 @@ export class NeuralNetwork {
         this.layers = new Array(neuronCounts.length - 1);
 
         for (let i = 0; i < this.layers.length; i++) {
-            const activation =
-                i === this.layers.length - 1 ? "sigmoid" : "relu";
-
-            this.layers[i] = new Layer(
-                neuronCounts[i],
-                neuronCounts[i + 1],
-                activation
-            );
+            const activation = i === this.layers.length - 1 ? "sigmoid" : "relu";
+            this.layers[i] = new Layer(neuronCounts[i], neuronCounts[i + 1], activation );
         }
     }
 
@@ -87,7 +81,7 @@ export class NeuralNetwork {
             output = Layer.feedForward(output, this.layers[i]);
         }
 
-        return output;
+        return output.map(o => Math.ceil(o * 7));
     }
 
     mutate(parent, mutationRate = 0.01) {
