@@ -1,112 +1,130 @@
 export class Layer {
-  constructor(inputCount, outputCount, activation = "relu") {
-    this.inputs = new Array(inputCount);
-    this.outputs = new Array(outputCount);
-    this.biases = new Array(outputCount);
-    this.weights = [];
-    this.activation = activation;
+    constructor(inputCount, outputCount, activation = "relu") {
+        this.inputCount = inputCount;
+        this.outputCount = outputCount;
 
-    for (let i = 0; i < inputCount; i++) {
-      this.weights[i] = new Array(outputCount);
+        this.inputs = new Float32Array(inputCount);
+        this.outputs = new Float32Array(outputCount);
+        this.biases = new Float32Array(outputCount);
+
+        // Flat weight matrix
+        this.weights = new Float32Array(inputCount * outputCount);
+
+        this.activation = activation;
+
+        Layer.#randomize(this);
     }
 
-    Layer.#randomize(this);
-  }
+    static #randomize(layer) {
+        const { inputCount, outputCount, activation, weights } = layer;
 
-  static #randomize(level) {
-    const inputCount = level.inputs.length;
-    const outputCount = level.outputs.length;
+        const stdDev =
+            activation === "relu"
+                ? Math.sqrt(2 / inputCount)
+                : Math.sqrt(2 / (inputCount + outputCount));
 
-    let standardDeviation;
-
-    if (level.activation === "relu") {
-      // He initialization
-      standardDeviation = Math.sqrt(2 / inputCount);
-    } else {
-      // Xavier initialization
-      standardDeviation = Math.sqrt(2 / (inputCount + outputCount));
+        for (let i = 0; i < weights.length; i++) {
+            weights[i] = Layer.#randomNormal() * stdDev;
+        }
     }
 
-    for (let i = 0; i < inputCount; i++) {
-      for (let j = 0; j < outputCount; j++) {
-        level.weights[i][j] = Layer.#randomNormal() * standardDeviation;
-      }
+    static #randomNormal() {
+        const u1 = Math.random() || Number.MIN_VALUE;
+        const u2 = Math.random();
+
+        return Math.sqrt(-2 * Math.log(u1)) *
+            Math.cos(2 * Math.PI * u2);
     }
 
-    // Initialize biases to zero
-    level.biases.fill(0);
-  }
+    static feedForward(givenInputs, layer) {
+        const {
+            inputCount,
+            outputCount,
+            weights,
+            biases,
+            outputs,
+            activation,
+        } = layer;
 
-  static #randomNormal() {
-    const u1 = Math.random();
-    const u2 = Math.random();
+        for (let i = 0; i < outputCount; i++) {
+            let sum = biases[i];
+            let weightIndex = i;
 
-    return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-  }
+            for (let j = 0; j < inputCount; j++) {
+                sum += givenInputs[j] * weights[weightIndex];
+                weightIndex += outputCount;
+            }
 
-  static feedForward(givenInputs, level) {
-    for (let i = 0; i < level.inputs.length; i++) {
-      level.inputs[i] = givenInputs[i];
+            outputs[i] = activation === "relu" ? Math.max(0, sum)
+                : activation === "sigmoid" ? 1 / (1 + Math.exp(-sum)) : sum;
+        }
+
+        return outputs;
     }
-
-    for (let i = 0; i < level.outputs.length; i++) {
-      let sum = level.biases[i];
-
-      for (let j = 0; j < level.inputs.length; j++) {
-        sum += level.inputs[j] * level.weights[j][i];
-      }
-
-      level.outputs[i] = Layer.#activate(sum, level.activation);
-    }
-
-    return level.outputs;
-  }
-
-  static #activate(value, activation) {
-    switch (activation) {
-      case "relu":
-        return Math.max(0, value);
-      case "sigmoid":
-        return 1 / (1 + Math.exp(-value));
-      default:
-        return value;
-    }
-  }
 }
+
 
 export class NeuralNetwork {
-  constructor(neuronCounts) {
-    this.layers = [];
+    constructor(neuronCounts) {
+        this.layers = new Array(neuronCounts.length - 1);
 
-    for (let i = 0; i < neuronCounts - 1; i++) {
-      const activation = i === neuronCounts.length - 2 ? "sigmoid" : "relu";
+        for (let i = 0; i < this.layers.length; i++) {
+            const activation =
+                i === this.layers.length - 1 ? "sigmoid" : "relu";
 
-      this.layers.push(
-        new Layer(neuronCounts[i], neuronCounts[i + 1], activation),
-      );
-    }
-  }
-
-  startLearning() {
-    const whiteBrian = new NeuralNetwork([277, 114, 54, 4]);
-    const blackBrian = new NeuralNetwork([277, 114, 54, 4]);
-
-    // Modifing the black brain
-    blackBrian.layers.forEach((l, i) => {
-      for (let j = 0; j < l.inputs.length; j++) {
-        for (let k = 0; k < l.outputs.length; k++) {
-          const mutation = (Math.random() * 2 - 1) * 0.01;
-          l.weights[j][k] = whiteBrian.layers[i].weights[j][k] + mutation;
+            this.layers[i] = new Layer(
+                neuronCounts[i],
+                neuronCounts[i + 1],
+                activation
+            );
         }
-      }
-    });
+    }
 
-    return initBoard();
-  }
+    predict(inputs) {
+        let output = inputs;
+
+        for (let i = 0; i < this.layers.length; i++) {
+            output = Layer.feedForward(output, this.layers[i]);
+        }
+
+        return output;
+    }
+
+    mutate(parent, mutationRate = 0.01) {
+        for (let i = 0; i < this.layers.length; i++) {
+            const childWeights = this.layers[i].weights;
+            const parentWeights = parent.layers[i].weights;
+
+            for (let j = 0; j < childWeights.length; j++) {
+                childWeights[j] =
+                    parentWeights[j] +
+                    (Math.random() * 2 - 1) * mutationRate;
+            }
+        }
+
+        return this;
+    }
+
+    clone() {
+        const child = new NeuralNetwork(
+            [
+                this.layers[0].inputCount,
+                ...this.layers.map(layer => layer.outputCount)
+            ]
+        );
+
+        for (let i = 0; i < this.layers.length; i++) {
+            child.layers[i].weights.set(this.layers[i].weights);
+            child.layers[i].biases.set(this.layers[i].biases);
+        }
+
+        return child;
+    }
 }
 
-function initBoard() {
-  const picies = {
+
+export function initBoard() {
+  const pieces = {
     w: {
       p: [0, 0, 0, 1],
       n: [0, 0, 1, 0],
@@ -125,37 +143,43 @@ function initBoard() {
     },
   };
 
-  // White A,B,C,D,E,F,G,H and Black A,B,C,D,E,F,G,H; 0 unavailable 1 available
-  const enPassant = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-  
-  const features = [
-    0, // White kingside castling
-    0, // White queenside castling
-    0, // Black kingside castling
-    0, // Black queenside castling
-    0, // Side to move (0 = White, 1 = Black)
-  ];
-
   const layout = ["r", "n", "b", "q", "k", "b", "n", "r"];
-  const board = [];
-  const blackPawnsRank = [];
-  const whitePawnsRank = [];
+
+  // 64 squares * 4 bits
+  // 16 en passant flags + 5 additional features
+  const board = new Uint8Array(277);
+
+  let offset = 0;
+
+  // Black back rank
   for (let i = 0; i < 8; i++) {
-    blackPawnsRank.push(...picies.b.p);
-    whitePawnsRank.push(...picies.w.p);
+    board.set(pieces.b[layout[i]], offset);
+    offset += 4;
   }
-  layout.map((p) => {
-    board.push(...picies.b[p]);
-  });
 
-  board.push(...blackPawnsRank);
-  board.push(...new Array(128).fill(0));
-  board.push(...whitePawnsRank);
-  layout.map((p) => {
-    board.push(...picies.w[p]);
-  });
+  // Black pawns
+  for (let i = 0; i < 8; i++) {
+    board.set(pieces.b.p, offset);
+    offset += 4;
+  }
 
-  return [...board, ...enPassant, ...features];
+  // Empty squares are already initialized to zero.
+  offset += 128;
+
+  // White pawns
+  for (let i = 0; i < 8; i++) {
+    board.set(pieces.w.p, offset);
+    offset += 4;
+  }
+
+  // White back rank
+  for (let i = 0; i < 8; i++) {
+    board.set(pieces.w[layout[i]], offset);
+    offset += 4;
+  }
+
+  return board;
 }
+
 
 // const squareIndex = (row * 8 + col) * 4;

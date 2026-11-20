@@ -1,12 +1,11 @@
 import { ChessGame } from "./actions.js";
 import { Bot } from "./bot.js";
 import { ChessUI } from "./ui.js";
-import { NeuralNetwork } from "./neuralNetwork.js";
+import { NeuralNetwork, initBoard } from "./neuralNetwork.js";
 class GameManager {
   constructor() {
     this.game = new ChessGame();
     this.ui = new ChessUI();
-    this.brain = new NeuralNetwork();
     this.bot = new Bot({
       maxSearchTime: 1500,
       maxTableSize: 200000,
@@ -302,7 +301,10 @@ class GameManager {
   }
 
   startTraining() {
-    this.inputs = this.brain.startLearning();
+    const whiteBrain = new NeuralNetwork([277, 114, 54, 4]);
+    const blackBrain = new NeuralNetwork([277, 114, 54, 4]);
+
+    this.inputs = initBoard();
     console.log(this.inputs);
   }
 }
