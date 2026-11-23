@@ -12,10 +12,7 @@ async function loadTrainingData() {
         const lines = csvText.trim().split(/\r?\n/);
 
         // Handle possible UTF-8 BOM
-        const headers = lines[0]
-            .replace(/^\uFEFF/, "")
-            .split(",")
-            .map(h => h.trim());
+        const headers = lines[0].replace(/^\uFEFF/, "").split(",").map(h => h.trim());
         const trainingData = lines.slice(1)
             .filter(line => line.trim() !== "")
             .map(line => {
@@ -42,7 +39,6 @@ async function loadTrainingData() {
 }
 
 function createTrainingChart(data) {
-
     const canvas = document.getElementById("trainingChart");
 
     if (!canvas) {
@@ -79,10 +75,7 @@ function createTrainingChart(data) {
 
         return {
             label: metric.label,
-            data: values.map(value =>
-                maxValue > 0 ? (value / maxValue) * 100 : 0
-            ),
-
+            data: values.map(value => maxValue > 0 ? (value / maxValue) * 100 : 0 ),
             borderColor: metric.color,
             backgroundColor: metric.color,
             borderWidth: 2,
@@ -122,7 +115,6 @@ function createTrainingChart(data) {
                         padding: 15
                     }
                 },
-
                 tooltip: {
                     enabled: true,
                     callbacks: {
@@ -169,7 +161,6 @@ function createTrainingChart(data) {
             }
         }
     });
-
 }
 
 function headersExist(column, data) { return data.length > 0 && Object.prototype.hasOwnProperty.call(data[0], column); }
