@@ -1,337 +1,840 @@
-import { ChessGame } from "./actions.js";
-import { Bot } from "./bot.js";
+import { Actions } from "./actions.js";
 import { ChessUI } from "./ui.js";
-import { NeuralNetwork, initBoard } from "./neuralNetwork.js";
-class GameManager {
-  constructor() {
-    this.game = new ChessGame();
-    this.ui = new ChessUI();
-    this.bot = new Bot({
-      maxSearchTime: 1500,
-      maxTableSize: 200000,
-      quiescenceDepth: 4,
-      developmentWeight: 1.0,
-      kingSafetyWeight: 0.8,
-      vulnerabilityWeight: 0.22,
-      mobilityWeight: 0.65,
-    });
-    this.moveSound = new Audio("/MoveSound.mp3");
-    this.gameOverSound = new Audio("/CheckMat.mp3");
-    this.checkSound = new Audio("/Check.mp3");
-    this.newGame();
-    this.initListeners();
-    this.inputs = [];
-  }
+import { NeuralNetwork } from "./neuralNetwork.js";
 
-  initListeners() {
-    this.ui.boardElement.addEventListener("click", (e) =>
-      this.handleBoardClick(e),
-    );
-    this.ui.startBtn.addEventListener("click", () => this.startGame());
-    this.ui.pauseBtn.addEventListener("click", () => this.pauseGame());
-    this.ui.undoBtn.addEventListener("click", () => this.undoMove());
-    this.ui.newGame.addEventListener("click", () => this.newGame());
-    this.ui.trainBtn.addEventListener("click", () => this.startTraining());
-    this.ui.modeSelector.addEventListener("change", (e) => {
-      this.gameMode = e.target.value;
-      this.ui.updateBlackLabel(this.gameMode);
-    });
-    this.ui.pauseBtn.disabled = true;
-  }
+const NET_SHAPE = [277, 114, 54, 4];
+const INPUT_SIZE = 277; // 64 squares * 4 bits, plus feature flags
+const SIDE_TO_MOVE_INDEX = INPUT_SIZE - 1;
+const MAX_TRAINING_PLIES = 200;
 
-  newGame() {
-    clearInterval(this.timerInterval);
-    this.game.reset();
-    this.gameStarted = false;
-    this.gameOver = false;
-    this.selectedSquare = null;
-    this.ui.pauseBtn.disabled = true;
-    this.legalMoves = [];
-    this.ui.startBtn.textContent = "Start Game";
-    this.ui.startBtn.disabled = false;
-    this.ui.modeSelector.disabled = false;
-    this.ui.undoBtn.disabled = true;
-    this.whiteTime = 1200;
-    this.blackTime = 600;
-    this.ui.pauseBtn.textContent = "Pause Game";
-    clearTimeout(this.botTimeout);
-    this.botTimeout = null;
-    this.gamePaused = false;
-    this.gameMode = "bot";
-    this.timerInterval = null;
-    this.ui.renderBoard(this.game.board);
-    this.ui.renderHistory(this.game.moveHistoryNotation);
-    this.ui.renderStatus("Welcome! Click 'Start Game'");
-    this.ui.renderTimers(this.whiteTime, this.blackTime);
-    this.ui.updateBlackLabel(this.gameMode);
-  }
+// One press of "Train the model" plays this many games. Black always holds the
+// current champion; white is its challenger. The winner of each game takes
+// the black seat for the next game, whichever colour it won with.
+const TRAINING_CYCLES = 1000;
+// How far a challenger drifts from the champion before each game.
+const WHITE_MUTATION_RATE = 0.001;
+// A draw means white is still following the same drawing line. Each drawn
+// game nudges the next challenger's biases further from the champion, up to a
+// cap, so repeated 23-ply repetitions eventually become decisive games.
+const DRAW_BIAS_RATE = 0.005;
+const MAX_DRAW_DRIFT = 0.1;
+// Learning signal for positions where a better capture is available. Kept
+// small, because the champion trains across thousands of positions and an
+// aggressive rate saturates the sigmoid outputs.
+const CAPTURE_LEARNING_RATE = 0.02;
+const CORRECTION_LEARNING_RATE = 0.01;
+// Empty-square guesses are the bulk of rejected predictions; learning them at
+// full rate drowns the capture signal with noise.
+const EMPTY_SQUARE_LEARNING_RATE = 0.002;
+const PROGRESS_EVERY = 10;
 
-  startGame() {
-    if (this.gameStarted) return;
-    this.gameStarted = true;
-    this.gameOver = false;
-    this.ui.startBtn.textContent = "Game in Progress";
-    this.ui.startBtn.disabled = true;
-    this.ui.modeSelector.disabled = true;
-    this.ui.renderStatus("White's turn");
-    this.startTimers();
-    this.ui.pauseBtn.disabled = false;
-    if (this.gameMode === "train") this.makebotMove();
-  }
+const BOT_DELAY_MS = 150;
+const PROMOTION_PIECES = new Set(["q", "r", "b", "n"]);
 
-  pauseGame() {
-    this.gamePaused = !this.gamePaused;
-    clearTimeout(this.botTimeout);
-    this.botTimeout = null;
+// Material values used to decide whether a game produced a winner.
+const PIECE_VALUES = Object.freeze({ p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 });
+// One pawn is not a result; require a piece's worth of material to call a win.
+const WINNING_MARGIN = 3;
+const BRAIN_ENDPOINT = "/api/brains";
+const BRAIN_STORAGE_KEY = "smartchess-brains";
+const TRAINING_LOG_ENDPOINT = "/api/training-log";
+const TRAINING_LOG_KEY = "smartchess-training-log";
+const TRAINING_LOG_HEADER = "Training,black win,white win,draw,corrected,illegal move,empty square,repeated";
+const TRAINING_LOG_COLUMNS = TRAINING_LOG_HEADER.split(",").length;
 
-    if (!this.gamePaused) {
-      this.ui.pauseBtn.textContent = "Pause Game";
-      if (
-        (this.gameMode === "bot" && this.game.turn === "b") ||
-        this.gameMode === "train"
-      ) {
-        this.makebotMove();
-      }
-      return;
+// 4-bit signature per piece. Kept identical to the original encoding so
+// inputs stay compatible with earlier training runs.
+const PIECE_CODES = Object.freeze({
+    wp: [0, 0, 0, 1], wn: [0, 0, 1, 0], wb: [0, 0, 1, 1],
+    wr: [0, 1, 0, 0], wq: [0, 1, 0, 1], wk: [0, 1, 1, 0],
+    bp: [1, 0, 0, 1], bn: [1, 0, 1, 0], bb: [1, 0, 1, 1],
+    br: [1, 1, 0, 0], bq: [1, 1, 0, 1], bk: [1, 1, 1, 0]
+});
+
+const squareKey = move => `${move.fromRow}${move.fromCol}${move.toRow}${move.toCol}`;
+
+// Encodes the live position on demand instead of keeping a hand-built board
+// snapshot that went stale as soon as a piece moved. The final element is the
+// side to move (1 = white), which chooseNetworkMove validates against the board.
+function encodeBoard(board, turn) {
+    const inputs = new Uint8Array(INPUT_SIZE);
+
+    let offset = 0;
+    for (let row = 0; row < 8; row++) {
+        const rowPieces = board[row];
+
+        for (let col = 0; col < 8; col++) {
+            const piece = rowPieces[col];
+            if (piece) inputs.set(PIECE_CODES[piece.color + piece.type], offset);
+            offset += 4;
+        }
     }
-    this.ui.pauseBtn.textContent = "Resume Game";
-  }
-  startTimers() {
-    clearInterval(this.timerInterval);
-    this.timerInterval = setInterval(() => {
-      if (this.gamePaused || this.gameOver || !this.gameStarted) return;
-      if (this.game.turn === "w") {
-        if (this.whiteTime > 0) this.whiteTime--;
-        if (this.whiteTime === 0) {
-          this.endGame("Time out! Black wins!");
+
+    inputs[SIDE_TO_MOVE_INDEX] = turn === "w" ? 1 : 0;
+    return inputs;
+}
+
+// A saturated output layer pins every coordinate at 0 or 7. The old training
+// runs could leave the saved champion in that state: it then played the same
+// illegal move regardless of tiny mutations, which is why black lost every game.
+// Detect it before training and start from a trainable network instead.
+function isSaturatedChampion(network) {
+    const probe = new Actions();
+    const inputs = encodeBoard(probe.board, "w");
+    const raw = network.predictRaw(inputs);
+    if (!raw.every(Number.isFinite)) return true;
+
+    const saturated = raw.filter(value => value < 0.001 || value > 0.999).length;
+    if (saturated < 3) return false;
+
+    const [fromRow, fromCol, toRow, toCol] = network.predict(inputs);
+    const piece = probe.getPiece(fromRow, fromCol);
+    if (!piece || piece.color !== "w") return true;
+
+    return !probe.getLegalMoves(fromRow, fromCol)
+        .some(move => move.row === toRow && move.col === toCol);
+}
+
+// The page is often served by a plain static server (VS Code's Live Preview on
+// port 5500, for example), which answers /api/brains/... with index.html or 405.
+// In that case brains are kept in browser storage instead, so training still
+// persists between reloads. Running `npm start` restores file storage.
+let brainStorage = "server";
+let trainingLogStorage = "server";
+
+function readBrowserBrains() {
+    if (typeof localStorage === "undefined") return {};
+
+    try {
+        return JSON.parse(localStorage.getItem(BRAIN_STORAGE_KEY) ?? "{}") ?? {};
+    } catch {
+        return {};
+    }
+}
+
+function writeBrowserBrain(color, payload) {
+    if (typeof localStorage === "undefined") return false;
+
+    try {
+        const brains = readBrowserBrains();
+        brains[color] = payload;
+        localStorage.setItem(BRAIN_STORAGE_KEY, JSON.stringify(brains));
+        return true;
+    } catch (error) {
+        console.warn(`Could not store the ${color} brain in the browser:`, error);
+        return false;
+    }
+}
+
+function loadBrowserBrain(color) {
+    const payload = readBrowserBrains()[color];
+    if (!payload) return null;
+
+    try {
+        return NeuralNetwork.fromJSON(payload);
+    } catch (error) {
+        console.warn(`Ignoring the stored ${color} brain:`, error);
+        return null;
+    }
+}
+
+async function loadBrainFile(color) {
+    if (brainStorage === "browser") return loadBrowserBrain(color);
+
+    try {
+        const response = await fetch(`${BRAIN_ENDPOINT}/${color}`);
+        const contentType = response.headers?.get?.("content-type") ?? "";
+
+        // Our own server answers a missing brain with a JSON 404, which just means
+        // nothing has been saved for that side yet.
+        if (response.status === 404 && contentType.includes("json")) return null;
+
+        // An HTML 404, HTML 200 or 405 means there is no brain API behind this URL.
+        if (!response.ok || !contentType.includes("json")) {
+            console.info(`No brain file API at ${BRAIN_ENDPOINT}; using browser storage.`);
+            brainStorage = "browser";
+            return loadBrowserBrain(color);
         }
-      } else {
-        if (this.blackTime > 0) this.blackTime--;
-        if (this.blackTime === 0) {
-          this.endGame("Time out! White wins!");
+
+        return NeuralNetwork.fromJSON(await response.json());
+    } catch (error) {
+        console.info(`Brain file API unreachable, using browser storage:`, error);
+        brainStorage = "browser";
+        return loadBrowserBrain(color);
+    }
+}
+
+async function saveBrainFile(color, brain) {
+    const payload = brain.toJSON();
+
+    if (brainStorage === "browser") {
+        return writeBrowserBrain(color, payload) ? "browser" : null;
+    }
+
+    try {
+        const response = await fetch(`${BRAIN_ENDPOINT}/${color}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        return "file";
+    } catch (error) {
+        console.info(`Cannot write brains/${color}.json here, keeping it in browser storage:`, error);
+        brainStorage = "browser";
+        return writeBrowserBrain(color, payload) ? "browser" : null;
+    }
+}
+
+// Training history is one CSV row per finished run:
+//   Training,black win,white win,draw,corrected,illegal move,empty square,repeated
+//   1,35,536,209,154,97,912,0
+// The server appends to training-log.csv; a static-only server falls back to
+// browser storage, just like the brains.
+// Earlier logs only had four columns. Pad their rows with zeroes so the
+// browser copy keeps one consistent header.
+function normalizeTrainingLog(csv) {
+    const lines = String(csv ?? "").split(/\r?\n/).filter(line => line.trim());
+    if (lines.length === 0) return `${TRAINING_LOG_HEADER}\n`;
+
+    if (lines[0].trim() !== TRAINING_LOG_HEADER) {
+        lines[0] = TRAINING_LOG_HEADER;
+        for (let i = 1; i < lines.length; i++) {
+            const cells = lines[i].split(",");
+            while (cells.length < TRAINING_LOG_COLUMNS) cells.push("0");
+            lines[i] = cells.slice(0, TRAINING_LOG_COLUMNS).join(",");
         }
-      }
-      this.ui.renderTimers(this.whiteTime, this.blackTime);
-    }, 1000);
-  }
+    }
 
-  handleBoardClick(e) {
-    if (!this.gameStarted || this.gameOver) return;
-    if (
-      this.gameMode === "train" ||
-      (this.gameMode === "bot" && this.game.turn === "b")
-    )
-      return;
+    return `${lines.join("\n")}\n`;
+}
 
-    const squareEl = e.target.closest(".square");
-    if (!squareEl) return;
+function readBrowserTrainingLog() {
+    if (typeof localStorage === "undefined") return `${TRAINING_LOG_HEADER}\n`;
 
-    const row = parseInt(squareEl.dataset.row);
-    const col = parseInt(squareEl.dataset.col);
-    const clickedPiece = this.game.getPiece(row, col);
+    try {
+        return normalizeTrainingLog(localStorage.getItem(TRAINING_LOG_KEY));
+    } catch {
+        return `${TRAINING_LOG_HEADER}\n`;
+    }
+}
 
-    if (this.selectedSquare) {
-      const moveMatch = this.legalMoves.find(
-        (m) => m.row === row && m.col === col,
-      );
-      if (moveMatch) {
-        const fromRow = this.selectedSquare.row;
-        const fromCol = this.selectedSquare.col;
+function countTrainingSessions(csv) {
+    return Math.max(0, csv.split(/\r?\n/).filter(line => line.trim()).length - 1);
+}
 
-        if (moveMatch.promotion) {
-          this.pendingPromotion = {
-            fromRow,
-            fromCol,
-            toRow: row,
-            toCol: col,
-          };
+function trainingLogCounters(stats) {
+    return {
+        corrected: stats?.["wrong-side"] ?? 0,
+        illegal: stats?.["illegal-move"] ?? 0,
+        empty: stats?.["empty-square"] ?? 0,
+        repeated: stats?.["repeated-move"] ?? 0
+    };
+}
 
-          if (this.bot) {
-            const bestPiece = this.bot.findBestPromote(this.game, moveMatch, 5);
-            this.executeMove(
-              move.fromRow,
-              move.fromCol,
-              move.toRow,
-              move.toCol,
-              bestPiece,
-            );
-          }
-          showPromotionDialog(this.game.turn, (piece) => {
-            const move = this.pendingPromotion;
-            if (!move) return;
+function appendBrowserTrainingLog(black, white, draws, counters) {
+    if (typeof localStorage === "undefined") return null;
 
-            this.pendingPromotion = null;
-            hidePromotionDialog();
-            this.executeMove(
-              move.fromRow,
-              move.fromCol,
-              move.toRow,
-              move.toCol,
-              piece,
-            );
+    try {
+        const csv = readBrowserTrainingLog();
+        const session = countTrainingSessions(csv) + 1;
+        const row = `${session},${black},${white},${draws},` +
+            `${counters.corrected},${counters.illegal},${counters.empty},${counters.repeated}\n`;
+
+        localStorage.setItem(
+            TRAINING_LOG_KEY,
+            csv.endsWith("\n") ? csv + row : `${csv}\n${row}`
+        );
+        return session;
+    } catch (error) {
+        console.warn("Could not store the training log in the browser:", error);
+        return null;
+    }
+}
+
+async function logTrainingSession(black, white, draws, stats) {
+    const counters = trainingLogCounters(stats);
+
+    if (trainingLogStorage === "browser") {
+        const session = appendBrowserTrainingLog(black, white, draws, counters);
+        return session ? { storage: "browser", session } : null;
+    }
+
+    try {
+        const response = await fetch(TRAINING_LOG_ENDPOINT, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ black, white, draws, ...counters })
+        });
+        const contentType = response.headers?.get?.("content-type") ?? "";
+
+        if (!response.ok || !contentType.includes("json")) {
+            throw new Error(`HTTP ${response.status} ${contentType}`.trim());
+        }
+
+        const data = await response.json();
+        if (!Number.isInteger(data.session)) throw new Error("The log API returned no session number.");
+
+        return { storage: "file", session: data.session };
+    } catch (error) {
+        console.info("Cannot write training-log.csv here, keeping it in browser storage:", error);
+        trainingLogStorage = "browser";
+        const session = appendBrowserTrainingLog(black, white, draws, counters);
+        return session ? { storage: "browser", session } : null;
+    }
+}
+
+export class GameManager {
+    constructor() {
+        this.actions = new Actions();
+        this.ui = new ChessUI();
+
+        this.gameMode = this.ui.modeSelector?.value ?? "bot";
+        this.selectedSquare = null;
+        this.legalMoves = [];
+        this.gameOver = false;
+        this.training = false;
+        this.trainingStats = null;
+        this.botTimer = null;
+
+        // Both seats keep their network across games so a trained brain can be
+        // saved to disk and reloaded next time instead of starting over.
+        this.brains = { w: null, b: null };
+        this.brainsReady = this.loadBrains();
+
+        this.ui.boardElement.addEventListener("click", (event) => this.handleBoardClick(event));
+        this.ui.modeSelector?.addEventListener("change", (event) => {
+            this.gameMode = event.target.value;
+            this.startNewGame();
+        });
+        this.ui.trainBtn.addEventListener("click", () => this.startTraining());
+
+        this.startNewGame();
+    }
+
+    async loadBrains() {
+        const [white, black] = await Promise.all([
+            loadBrainFile("white"),
+            loadBrainFile("black")
+        ]);
+
+        this.brains.w = white;
+        this.brains.b = black;
+
+        const loaded = [white && "white", black && "black"].filter(Boolean);
+        if (loaded.length === 0) return;
+
+        console.info(`Loaded saved brain(s): ${loaded.join(", ")}.`);
+
+        if (!this.training && !this.gameOver && this.actions.moveHistoryNotation.length === 0) {
+            this.ui.renderStatus(`White to move - loaded ${loaded.join(" + ")} brain.`);
+        }
+    }
+
+    getBrain(color) {
+        const key = color === "b" ? "b" : "w";
+
+        if (!this.brains[key]) {
+            // Seed the second seat from its partner, so a reloaded brain gives
+            // the opponent a learned baseline instead of random noise.
+            const partner = this.brains[key === "w" ? "b" : "w"];
+            this.brains[key] = partner
+                ? new NeuralNetwork(NET_SHAPE).mutate(partner, 0.01)
+                : new NeuralNetwork(NET_SHAPE);
+        }
+
+        return this.brains[key];
+    }
+
+    startNewGame() {
+        clearTimeout(this.botTimer);
+
+        this.actions.reset();
+        this.gameOver = false;
+        this.training = false;
+        this.selectedSquare = null;
+        this.legalMoves = [];
+
+        this.ui.renderBoard(this.actions.board);
+        this.ui.renderHistory(this.actions.moveHistoryNotation);
+        this.ui.renderStatus(
+            this.gameMode === "train"
+                ? "Training mode - press 'Train the model'."
+                : "White to move"
+        );
+    }
+
+    handleBoardClick(event) {
+        if (this.gameOver || this.gameMode === "train") return;
+        if (this.gameMode === "bot" && this.actions.turn === "b") return;
+
+        const squareEl = event.target.closest(".square");
+        if (!squareEl) return;
+
+        const row = Number(squareEl.dataset.row);
+        const col = Number(squareEl.dataset.col);
+        const target = this.legalMoves.find(move => move.row === row && move.col === col);
+
+        if (target) {
+            if (target.promotion) {
+                this.ui.renderDialog(this.actions.turn, (piece) => {
+                    this.playMove(this.selectedSquare.row, this.selectedSquare.col, row, col, piece);
+                });
+                return;
+            }
+
+            this.playMove(this.selectedSquare.row, this.selectedSquare.col, row, col);
+            return;
+        }
+
+        const piece = this.actions.getPiece(row, col);
+        if (piece && piece.color === this.actions.turn) {
+            this.selectedSquare = { row, col };
+            this.legalMoves = this.actions.getLegalMoves(row, col);
+        } else {
             this.selectedSquare = null;
             this.legalMoves = [];
-            this.ui.renderBoard(this.game.board);
-          });
-          return;
         }
 
-        this.executeMove(fromRow, fromCol, row, col);
-        this.selectedSquare = null;
-        this.legalMoves = [];
-      } else if (clickedPiece && clickedPiece.color === this.game.turn) {
-        this.selectedSquare = { row, col };
-        this.legalMoves = this.game.getLegalMoves(row, col);
-      } else {
-        this.selectedSquare = null;
-        this.legalMoves = [];
-      }
-    } else {
-      if (clickedPiece && clickedPiece.color === this.game.turn) {
-        this.selectedSquare = { row, col };
-        this.legalMoves = this.game.getLegalMoves(row, col);
-      }
+        this.ui.renderBoard(this.actions.board, this.selectedSquare, this.legalMoves);
     }
 
-    this.ui.renderBoard(this.game.board, this.selectedSquare, this.legalMoves);
-  }
+    playMove(fromRow, fromCol, toRow, toCol, promotionPiece = "q") {
+        if (this.gameOver) return;
 
-  executeMove(fromRow, fromCol, toRow, toCol, promotionPiece = "q") {
-    if (this.gameOver || this.gamePaused) return;
+        const promotion = PROMOTION_PIECES.has(promotionPiece) ? promotionPiece : "q";
+        this.selectedSquare = null;
+        this.legalMoves = [];
 
-    const validPieces = ["q", "r", "b", "n"];
+        if (!this.actions.makeMove(fromRow, fromCol, toRow, toCol, promotion)) return;
 
-    if (!validPieces.includes(promotionPiece)) promotionPiece = "q";
-    if (this.game.makeMove(fromRow, fromCol, toRow, toCol, promotionPiece)) {
-      const drawResult = this.game.isDraw(this.game);
+        this.refreshAfterMove();
+    }
 
-      if (drawResult) {
+    // Single place that renders the result of a move. The previous version
+    // re-entered executeMove with the same arguments, so every move was applied
+    // again (and again) until something threw.
+    refreshAfterMove() {
+        const state = this.actions.getGameState();
+
+        this.ui.renderBoard(this.actions.board);
+        this.ui.renderHistory(this.actions.moveHistoryNotation);
+
+        if (state.over) {
+            this.endGame(state.message);
+            return;
+        }
+
+        this.ui.renderStatus(this.getStatusText(state.check));
+        this.scheduleBotMove();
+    }
+
+    getStatusText(inCheck) {
+        const suffix = inCheck ? " - Check!" : "";
+
+        if (this.actions.turn === "w") return `White's turn${suffix}`;
+        if (this.gameMode === "bot") return `Brian AI's turn...${suffix}`;
+        return `Black's turn${suffix}`;
+    }
+
+    scheduleBotMove() {
+        if (this.gameMode !== "bot" || this.gameOver || this.actions.turn !== "b") return;
+
+        clearTimeout(this.botTimer);
+        this.botTimer = setTimeout(() => this.playBotMove(), BOT_DELAY_MS);
+    }
+
+    playBotMove() {
+        if (this.gameOver || this.gameMode !== "bot" || this.actions.turn !== "b") return;
+
+        const move = this.chooseNetworkMove(this.getBrain("b"));
+        if (move) this.playMove(move.fromRow, move.fromCol, move.toRow, move.toCol, move.promotion);
+    }
+
+    // The raw prediction is four board coordinates. A prediction can point at an
+    // empty square, at the opponent's pieces, or at a destination the piece
+    // cannot reach; each of those is reported instead of silently accepted.
+    validatePrediction([fromRow, fromCol, toRow, toCol], expectedColor) {
+        const piece = this.actions.getPiece(fromRow, fromCol);
+
+        if (!piece) return "empty-square";
+        if (piece.color !== expectedColor) return "wrong-side";
+
+        const legal = this.actions.getLegalMoves(fromRow, fromCol);
+        return legal.some(move => move.row === toRow && move.col === toCol)
+            ? null
+            : "illegal-move";
+    }
+
+    nearestLegalMove([fromRow, fromCol, toRow, toCol], moves) {
+        let bestMove = null;
+        let bestDistance = Infinity;
+
+        for (const move of moves) {
+            const distance =
+                Math.abs(move.fromRow - fromRow) +
+                Math.abs(move.fromCol - fromCol) +
+                Math.abs(move.toRow - toRow) +
+                Math.abs(move.toCol - toCol);
+
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                bestMove = move;
+                if (distance === 0) break;
+            }
+        }
+
+        return bestMove;
+    }
+
+    // Dense training signal. Game outcomes are far too sparse to teach a policy
+    // (hundreds of moves, one result), so whenever a capture exists the network
+    // is taught to take the most valuable one. This is the signal that makes
+    // 1000 games actually change how the brain plays.
+    trainCapture(network, inputs, moves, chosen) {
+        let bestMove = null;
+        let bestGain = 0;
+
+        // Only teach captures that win material: taking a defended pawn with a
+        // queen is not a lesson worth reinforcing.
+        for (const move of moves) {
+            const victim = this.actions.getPiece(move.toRow, move.toCol);
+            const attacker = this.actions.getPiece(move.fromRow, move.fromCol);
+            if (!victim || !attacker) continue;
+
+            const gain = (PIECE_VALUES[victim.type] ?? 0) - (PIECE_VALUES[attacker.type] ?? 0);
+            if (gain > bestGain) {
+                bestGain = gain;
+                bestMove = move;
+            }
+        }
+
+        // Only correct mistakes. Re-teaching a move the network already plays
+        // just pushes the same weights every ply and saturates the outputs.
+        if (!bestMove || (chosen && squareKey(bestMove) === squareKey(chosen))) return;
+
+        network.train(
+            inputs,
+            [bestMove.fromRow, bestMove.fromCol, bestMove.toRow, bestMove.toCol],
+            CAPTURE_LEARNING_RATE
+        );
+    }
+
+    // Decodes the four network outputs into the closest legal move. When the
+    // prediction is invalid (wrong side's piece, empty square, unreachable
+    // square, or a move this side has already played twice) the network
+    // backprops one step toward the legal move it is being forced to play.
+    chooseNetworkMove(network, { bannedKeys = null, legalMoves = null, learn = this.training } = {}) {
+        const moves = legalMoves ?? this.actions.getAllLegalMoves(this.actions.turn);
+        if (moves.length === 0) return null;
+
+        const inputs = encodeBoard(this.actions.board, this.actions.turn);
+        const expectedColor = this.actions.turn;
+        const colorFromInputs = inputs[SIDE_TO_MOVE_INDEX] === 1 ? "w" : "b";
+
+        // The side to move is the last input. If it ever disagrees with the
+        // board, trust the board (and the validation below rejects the mismatch).
+        if (colorFromInputs !== expectedColor) {
+            console.warn(`Side-to-move input (${colorFromInputs}) disagrees with the board (${expectedColor}).`);
+        }
+
+        const predicted = network.predict(inputs);
+        const pieceProblem = this.validatePrediction(predicted, expectedColor);
+
+        let choices = moves;
+        let repeated = false;
+
+        if (bannedKeys?.size) {
+            const allowed = moves.filter(move => !bannedKeys.has(squareKey(move)));
+            if (allowed.length > 0) {
+                choices = allowed;
+                repeated = bannedKeys.has(squareKey(this.nearestLegalMove(predicted, moves)));
+            }
+        }
+
+        const chosen = this.nearestLegalMove(predicted, choices) ?? moves[0];
+        const issue = pieceProblem ?? (repeated ? "repeated-move" : null);
+
+        if (learn) this.trainCapture(network, inputs, choices, chosen);
+
+        if (issue) {
+            // Only learn while training. Otherwise a bot game, or an evaluation
+            // game, silently retrains the very brain it is testing.
+            if (learn) {
+                // A rejected prediction still teaches the hidden layers: without
+                // this the network keeps emitting empty squares and the
+                // closest-legal-move fallback, not the policy, decides.
+                network.train(
+                    inputs,
+                    [chosen.fromRow, chosen.fromCol, chosen.toRow, chosen.toCol],
+                    issue === "empty-square" ? EMPTY_SQUARE_LEARNING_RATE : CORRECTION_LEARNING_RATE
+                );
+            }
+
+            if (this.trainingStats) {
+                this.trainingStats[issue] = (this.trainingStats[issue] ?? 0) + 1;
+            }
+        }
+
+        return {
+            ...chosen,
+            promotion: chosen.promotion ? "q" : undefined,
+            issue
+        };
+    }
+
+    getMaterialBalance() {
+        let balance = 0;
+
+        for (const row of this.actions.board) {
+            for (const piece of row) {
+                if (!piece) continue;
+
+                const value = PIECE_VALUES[piece.type] ?? 0;
+                balance += piece.color === "w" ? value : -value;
+            }
+        }
+
+        return balance;
+    }
+
+    winnerByMaterial() {
+        const balance = this.getMaterialBalance();
+        if (Math.abs(balance) < WINNING_MARGIN) return null;
+
+        return balance > 0 ? "w" : "b";
+    }
+
+    // Ban every move this side has already played twice. A two-move shuffle
+    // (Ra4/Ra3, Ra8/Ra7) never repeats the same key back-to-back, so checking
+    // only the last two moves let it run forever. Banning all twice-used keys
+    // forces the brain to try something new instead of shuffling to a draw.
+    findRepeatedMoveKeys(keys) {
+        const counts = new Map();
+
+        for (const key of keys) {
+            counts.set(key, (counts.get(key) ?? 0) + 1);
+        }
+
+        const repeated = new Set();
+        for (const [key, count] of counts) {
+            if (count >= 2) repeated.add(key);
+        }
+
+        return repeated;
+    }
+
+    // One complete game. Both seats learn during the game; the caller decides
+    // which winning brain holds the black seat for the next game.
+    playTrainingGame(whiteBrain = this.brains.w, blackBrain = this.brains.b) {
+        // Every game starts from the initial position, so one game can never
+        // inherit the previous game's board.
+        this.actions.reset();
+        const ownMoveKeys = { w: [], b: [] };
+        let plies = 0;
+
+        while (plies < MAX_TRAINING_PLIES) {
+            const color = this.actions.turn;
+            const moves = this.actions.getAllLegalMoves(color);
+
+            if (moves.length === 0) {
+                const checked = this.actions.isInCheck(color);
+
+                if (checked) return { plies, winner: color === "w" ? "b" : "w", reason: "checkmate" };
+
+                // Stalemating an opponent while a piece up is a failure to
+                // convert, not a draw worth defending, so adjudicate it.
+                return {
+                    plies,
+                    winner: this.winnerByMaterial(),
+                    reason: "stalemate adjudicated on material"
+                };
+            }
+
+            const move = this.chooseNetworkMove(color === "w" ? whiteBrain : blackBrain, {
+                bannedKeys: this.findRepeatedMoveKeys(ownMoveKeys[color]),
+                legalMoves: moves,
+                learn: true
+            });
+
+            if (!move || !this.actions.makeMove(
+                move.fromRow, move.fromCol, move.toRow, move.toCol, move.promotion ?? "q"
+            )) break;
+
+            plies++;
+            ownMoveKeys[color].push(squareKey(move));
+
+            const draw = this.actions.isDraw();
+            if (draw) {
+                // Repetition and 75-move draws routinely end games with a big
+                // material gap: the side that is ahead is shuffling instead of
+                // converting. Adjudicate on material so the cycle still
+                // produces a winner for the selection loop.
+                return {
+                    plies,
+                    winner: this.winnerByMaterial(),
+                    reason: `${draw} adjudicated on material`
+                };
+            }
+        }
+
+        return { plies, winner: this.winnerByMaterial(), reason: "ply limit" };
+    }
+
+    async startTraining(cycles = TRAINING_CYCLES) {
+        if (this.training) return;
+
+        clearTimeout(this.botTimer);
+        this.training = true;
+        this.gameOver = false;
+        this.selectedSquare = null;
+        this.legalMoves = [];
+        this.trainingStats = {
+            "empty-square": 0,
+            "wrong-side": 0,
+            "illegal-move": 0,
+            "repeated-move": 0
+        };
+
+        this.ui.trainBtn.disabled = true;
+        this.ui.renderStatus(`Training 0/${cycles}...`);
+
+        try {
+            await this.brainsReady;
+
+            // Black is the best saved brain; the saved white file is only a
+            // fallback champion when no black brain has been stored yet.
+            this.brains.b ??= this.brains.w?.clone() ?? new NeuralNetwork(NET_SHAPE);
+
+            // The previous runs could save a champion whose outputs were pinned
+            // at 0/7. Such a brain cannot be nudged by mutation, so replace it
+            // once with a fresh network instead of running 1000 identical losses.
+            let repairedChampion = false;
+            if (isSaturatedChampion(this.brains.b)) {
+                console.warn(
+                    "Saved black brain is saturated (its opening prediction is illegal); " +
+                    "starting this run from a fresh network."
+                );
+                this.brains.b = new NeuralNetwork(NET_SHAPE);
+                repairedChampion = true;
+                this.ui.renderStatus(
+                    "Saved brain was saturated and always played the same illegal move - " +
+                    "starting from a fresh network..."
+                );
+            }
+
+            const wins = { w: 0, b: 0, draw: 0 };
+            let adjudicated = 0;
+            let gamesPlayed = 0;
+            let replaced = 0;
+            let drawMutated = 0;
+            let championSaves = 0;
+            let materialTotal = 0;
+            let drawDrift = 0;
+            const started = performance.now();
+
+            // The challenger is a 0.001 mutation of the champion. mutate()
+            // carries over both weights and biases, so the challenger really is
+            // the winner brain plus a small nudge.
+            let challenger = new NeuralNetwork(NET_SHAPE)
+                .mutate(this.brains.b, WHITE_MUTATION_RATE);
+            this.brains.w = challenger;
+
+            while (gamesPlayed < cycles) {
+                // White is the challenger, black is the current champion. The
+                // winner of this game holds the black seat for the next one,
+                // whichever colour it won with.
+                const result = this.playTrainingGame(challenger, this.brains.b);
+                const blackMaterial = -this.getMaterialBalance();
+
+                gamesPlayed += 1;
+                materialTotal += blackMaterial;
+                wins[result.winner ?? "draw"]++;
+                if (result.winner && result.reason.includes("adjudicated")) adjudicated++;
+
+                if (result.winner === null) {
+                    // A draw produces no winner, so black keeps the seat. Nudge
+                    // only the next challenger's biases, further after
+                    // consecutive draws, so a deterministic shuffle can break.
+                    drawDrift = Math.min(drawDrift + DRAW_BIAS_RATE, MAX_DRAW_DRIFT);
+                    drawMutated += 1;
+                } else {
+                    // A white win hands the challenger the black seat; a black
+                    // win keeps the champion. Either way the brain that won is
+                    // the black brain for the next game.
+                    if (result.winner === "w") {
+                        this.brains.b = challenger;
+                    }
+                    drawDrift = 0;
+
+                    // Persist the winner brain immediately, including both its
+                    // weights and biases, so an interrupted run still has it.
+                    const stored = await saveBrainFile("black", challenger);
+                    if (stored) championSaves++;
+                }
+
+                challenger = new NeuralNetwork(NET_SHAPE)
+                    .mutate(this.brains.b, WHITE_MUTATION_RATE);
+                if (drawDrift > 0) {
+                    challenger.mutateBiases(drawDrift);
+                }
+                this.brains.w = challenger;
+
+                if (gamesPlayed % PROGRESS_EVERY === 0) {
+                    this.ui.renderStatus(
+                        `Training ${gamesPlayed}/${cycles} - black ${wins.b}, ` +
+                        `white ${wins.w}, draws ${wins.draw}`
+                    );
+                    // Yield so the page can repaint during a long run.
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                }
+            }
+
+            const seconds = (performance.now() - started) / 1000;
+            const stats = this.trainingStats;
+            const saved = await saveBrainFile("black", this.brains.b);
+            const logged = await logTrainingSession(wins.b, wins.w, wins.draw, stats);
+
+            this.ui.renderBoard(this.actions.board);
+            this.ui.renderHistory(this.actions.moveHistoryNotation);
+            this.ui.renderStatus(
+                `${gamesPlayed} games in ${seconds.toFixed(1)}s - black ${wins.b}, white ${wins.w}, ` +
+                `draws ${wins.draw}; ${adjudicated} adjudicated on material. ` +
+                `Black averaged ${(materialTotal / (gamesPlayed || 1)).toFixed(1)} material per game. ` +
+                (repairedChampion ? "Saturated saved brain replaced with a fresh network. " : "") +
+                `Champion changed after ${replaced} white wins; winner brain saved ${championSaves} times; ` +
+                `white biases nudged after ${drawMutated} draws (drift ${drawDrift.toFixed(3)}). ` +
+                `Corrected ${stats["wrong-side"]} wrong-side, ${stats["empty-square"]} empty-square, ` +
+                `${stats["illegal-move"]} illegal, ${stats["repeated-move"]} repeated picks. ` +
+                (saved === "file"
+                    ? "Winner brain saved to brains/black.json."
+                    : saved === "browser"
+                        ? "Winner brain saved in browser storage (no file API on this server)."
+                        : "Could not save the winner brain.") +
+                (logged
+                    ? ` Training session ${logged.session} logged to ${logged.storage === "file" ? "training-log.csv" : "browser storage"}.`
+                    : " Could not write the training log.")
+            );
+        } finally {
+            this.training = false;
+            this.trainingStats = null;
+            this.ui.trainBtn.disabled = false;
+        }
+    }
+
+    endGame(message) {
         this.gameOver = true;
-        // Display the draw result in your game UI.
-        this.ui.renderStatus(drawResult.message);
-        this.gameOverSound.play();
-        return;
-      }
+        clearTimeout(this.botTimer);
+        this.selectedSquare = null;
+        this.legalMoves = [];
 
-      this.ui.renderBoard(this.game.board);
-      this.ui.renderHistory(this.game.moveHistoryNotation);
-      this.ui.undoBtn.disabled = false;
-
-      const currTurn = this.game.turn;
-
-      if (this.game.isCheckmate(currTurn)) {
-        const winner = currTurn === "w" ? "Black" : "White";
-        this.endGame(`Checkmate! ${winner} wins!`);
-        this.gameOverSound.play();
-        return;
-      } else if (this.game.isStalemate(currTurn)) {
-        this.endGame("Stalemate! It's a draw.");
-        this.gameOverSound.play();
-        return;
-      } else if (this.game.isInCheck(currTurn)) {
-        this.checkSound.play();
-        this.ui.renderStatus(
-          `${currTurn === "w" ? "White" : "Black"}'s turn - Check!`,
-        );
-      } else {
-        this.ui.renderStatus(
-          `${currTurn === "w" ? "White's turn" : this.gameMode === "bot" ? "Brian AI's turn..." : "Black's turn"}`,
-        );
-      }
-
-      if (this.gameMode === "train") {
-        setTimeout(() => this.makebotMove(), 1500);
-      }
-
-      if (this.gameMode === "bot" && this.game.turn === "b") {
-        setTimeout(() => this.makebotMove(), 1000);
-      }
-      this.moveSound.play();
+        this.ui.renderBoard(this.actions.board);
+        this.ui.renderStatus(message);
     }
-  }
-
-  makebotMove() {
-    if (this.gameOver || this.gamePaused) return;
-    const botMove = this.bot.findBestMove(this.game, 8);
-
-    if (botMove) {
-      this.executeMove(
-        botMove.fromRow,
-        botMove.fromCol,
-        botMove.toRow,
-        botMove.toCol,
-        botMove.promotion,
-      );
-    }
-  }
-
-  undoMove() {
-    if (this.game.history.length === 0 || !this.gameStarted || this.gameOver)
-      return;
-
-    const steps = this.gameMode === "bot" ? 2 : 1;
-
-    for (let i = 0; i < steps; i++) {
-      if (this.game.history.length > 0) {
-        this.game.undo();
-      }
-    }
-
-    this.selectedSquare = null;
-    this.legalMoves = [];
-    this.ui.renderBoard(this.game.board);
-    this.ui.renderHistory(this.game.moveHistoryNotation);
-    if (this.game.history.length === 0) {
-      this.ui.undoBtn.disabled = true;
-    }
-    const currTurn =
-      this.game.turn === "w"
-        ? "White's turn"
-        : this.gameMode === "bot"
-          ? "Brian AI's turn..."
-          : "Black's turn";
-    this.ui.renderStatus(currTurn);
-  }
-
-  endGame(message) {
-    this.gameOver = true;
-    clearInterval(this.timerInterval);
-    this.ui.renderStatus(message);
-    this.ui.undoBtn.disabled = true;
-  }
-
-  startTraining() {
-    const turn = "w"
-    const whiteBrain = new NeuralNetwork([277, 114, 54, 4]);
-    const blackBrain = whiteBrain.clone();
-    blackBrain.mutate(whiteBrain, 0.01);
-
-    this.inputs = initBoard();
-
-    const whiteOutput = whiteBrain.predict(this.inputs);
-    const blackOutput = blackBrain.predict(this.inputs);
-
-    console.log(whiteOutput, blackOutput);
-
-    if(turn === "w"){
-      this.executeMove(whiteOutput);
-      this.inputs[276] = 1;
-    }
-    else {
-      this.executeMove(blackOutput);
-      this.inputs[276] = 0;
-    }
-    // const squareIndex = (row * 8 + col) * 4
-  }
 }
 
 window.addEventListener("DOMContentLoaded", () => {
-  new GameManager();
+    new GameManager();
 });
-
-function showPromotionDialog(color, onSelect) {
-  this.ui.renderDiaglog(color, onSelect);
-}
-function hidePromotionDialog() {
-  document.getElementById("promotion-modal")?.remove();
-}

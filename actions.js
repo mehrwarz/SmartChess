@@ -1,31 +1,32 @@
-export class ChessGame {
+const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+const RANKS = ['8', '7', '6', '5', '4', '3', '2', '1'];
+
+const KNIGHT_OFFSETS = [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]];
+const KING_OFFSETS = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]];
+const ORTHOGONAL_DIRS = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+const DIAGONAL_DIRS = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
+
+const INITIAL_RANK = ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'];
+
+const isOnBoard = (row, col) => row >= 0 && row < 8 && col >= 0 && col < 8;
+
+export class Actions {
     constructor() {
         this.reset();
     }
 
     reset() {
-        this.board = [
-            [
-                { type: 'r', color: 'b' }, { type: 'n', color: 'b' }, { type: 'b', color: 'b' }, { type: 'q', color: 'b' },
-                { type: 'k', color: 'b' }, { type: 'b', color: 'b' }, { type: 'n', color: 'b' }, { type: 'r', color: 'b' }
-            ],
-            [
-                { type: 'p', color: 'b' }, { type: 'p', color: 'b' }, { type: 'p', color: 'b' }, { type: 'p', color: 'b' },
-                { type: 'p', color: 'b' }, { type: 'p', color: 'b' }, { type: 'p', color: 'b' }, { type: 'p', color: 'b' }
-            ],
-            Array(8).fill(null),
-            Array(8).fill(null),
-            Array(8).fill(null),
-            Array(8).fill(null),
-            [
-                { type: 'p', color: 'w' }, { type: 'p', color: 'w' }, { type: 'p', color: 'w' }, { type: 'p', color: 'w' },
-                { type: 'p', color: 'w' }, { type: 'p', color: 'w' }, { type: 'p', color: 'w' }, { type: 'p', color: 'w' }
-            ],
-            [
-                { type: 'r', color: 'w' }, { type: 'n', color: 'w' }, { type: 'b', color: 'w' }, { type: 'q', color: 'w' },
-                { type: 'k', color: 'w' }, { type: 'b', color: 'w' }, { type: 'n', color: 'w' }, { type: 'r', color: 'w' }
-            ]
-        ];
+        this.board = Array.from({ length: 8 }, (_, row) => {
+            if (row > 1 && row < 6) return Array(8).fill(null);
+
+            const color = row < 2 ? 'b' : 'w';
+            const pawnRow = row === 1 || row === 6;
+
+            return Array.from({ length: 8 }, (_, col) => ({
+                type: pawnRow ? 'p' : INITIAL_RANK[col],
+                color
+            }));
+        });
 
         this.turn = 'w';
         this.castling = {
@@ -33,40 +34,43 @@ export class ChessGame {
             b: { kingSide: true, queenSide: true }
         };
         this.enPassantSquare = null;
+        this.halfMoveClock = 0;
         this.history = [];
         this.moveHistoryNotation = [];
-
-        // Repetition tracking maps
-        this.positionCounts = new Map();
-        const initialKey = this.getPositionKey(this.board, this.turn, this.castling, this.enPassantSquare);
-        this.positionCounts.set(initialKey, 1);
+        this.positionCounts = new Map([[this.getPositionKey(), 1]]);
     }
 
     getPositionKey(board = this.board, turn = this.turn, castling = this.castling, enPassant = this.enPassantSquare) {
-        let boardStr = '';
+        const parts = new Array(68);
+
+        let index = 0;
         for (let r = 0; r < 8; r++) {
             for (let c = 0; c < 8; c++) {
-                const p = board[r][c];
-                boardStr += p ? `${p.color}${p.type}` : '.';
+                const piece = board[r][c];
+                parts[index++] = piece ? piece.color + piece.type : '--';
             }
         }
-        const castlingStr = [
-            castling?.w?.kingSide ? 'K' : '',
-            castling?.w?.queenSide ? 'Q' : '',
-            castling?.b?.kingSide ? 'k' : '',
-            castling?.b?.queenSide ? 'q' : ''
-        ].join('');
-        const epStr = enPassant ? `${enPassant.row},${enPassant.col}` : '-';
-        return `${boardStr}_${turn}_${castlingStr}_${epStr}`;
+
+        const castlingStr =
+            (castling?.w?.kingSide ? 'K' : '') +
+            (castling?.w?.queenSide ? 'Q' : '') +
+            (castling?.b?.kingSide ? 'k' : '') +
+            (castling?.b?.queenSide ? 'q' : '');
+
+        parts[index++] = turn;
+        parts[index++] = castlingStr;
+        parts[index] = enPassant ? `${enPassant.row},${enPassant.col}` : '-';
+
+        return parts.join('');
     }
 
     getPiece(row, col) {
-        if (row < 0 || row > 7 || col < 0 || col > 7) return null;
+        if (!isOnBoard(row, col)) return null;
         return this.board[row][col];
     }
 
     cloneBoard() {
-        return this.board.map(row => row.map(piece => piece ? { ...piece } : null));
+        return this.board.map(row => row.map(piece => (piece ? { ...piece } : null)));
     }
 
     getLegalMoves(row, col) {
@@ -75,29 +79,53 @@ export class ChessGame {
 
         const pseudoMoves = this.getPseudoLegalMoves(row, col, this.board, this.castling, this.enPassantSquare);
         const legalMoves = [];
+
         for (const move of pseudoMoves) {
-            if (!this.resultsInCheck(row, col, move.row, move.col)) {
-                legalMoves.push(move);
-            }
+            if (!this.moveLeavesKingInCheck(row, col, move)) legalMoves.push(move);
         }
+
         return legalMoves;
+    }
+
+    // Tests a candidate move by playing it in place and rewinding, which avoids
+    // cloning the whole board for every pseudo-legal move.
+    moveLeavesKingInCheck(fromRow, fromCol, move) {
+        const board = this.board;
+        const piece = board[fromRow][fromCol];
+        const captured = board[move.row][move.col];
+
+        const enPassantRow = move.enPassant ? (piece.color === 'w' ? move.row + 1 : move.row - 1) : -1;
+        const enPassantCaptured = enPassantRow === -1 ? null : board[enPassantRow][move.col];
+
+        if (enPassantRow !== -1) board[enPassantRow][move.col] = null;
+        board[move.row][move.col] = piece;
+        board[fromRow][fromCol] = null;
+
+        const inCheck = this.isInCheck(piece.color);
+
+        board[fromRow][fromCol] = piece;
+        board[move.row][move.col] = captured;
+        if (enPassantRow !== -1) board[enPassantRow][move.col] = enPassantCaptured;
+
+        return inCheck;
     }
 
     getPseudoLegalMoves(row, col, board, castling, enPassantSquare) {
         const piece = board[row][col];
         if (!piece) return [];
+
         const moves = [];
         const color = piece.color;
         const oppColor = color === 'w' ? 'b' : 'w';
 
         const addMove = (r, c, special = {}) => {
-            if (r >= 0 && r < 8 && c >= 0 && c < 8) {
-                const target = board[r][c];
-                if (!target) {
-                    moves.push({ row: r, col: c, ...special });
-                } else if (target.color !== color) {
-                    moves.push({ row: r, col: c, capture: true, ...special });
-                }
+            if (!isOnBoard(r, c)) return;
+
+            const target = board[r][c];
+            if (!target) {
+                moves.push({ row: r, col: c, ...special });
+            } else if (target.color !== color) {
+                moves.push({ row: r, col: c, capture: true, ...special });
             }
         };
 
@@ -106,9 +134,8 @@ export class ChessGame {
             const startRow = color === 'w' ? 6 : 1;
 
             const r1 = row + dir;
-            if (r1 >= 0 && r1 < 8 && !board[r1][col]) {
-                const isPromo = (color === 'w' && r1 === 0) || (color === 'b' && r1 === 7);
-                moves.push({ row: r1, col: col, promotion: isPromo });
+            if (isOnBoard(r1, col) && !board[r1][col]) {
+                moves.push({ row: r1, col: col, promotion: (color === 'w' && r1 === 0) || (color === 'b' && r1 === 7) });
 
                 const r2 = row + 2 * dir;
                 if (row === startRow && !board[r2][col]) {
@@ -118,59 +145,49 @@ export class ChessGame {
 
             for (const dc of [-1, 1]) {
                 const nc = col + dc;
-                if (r1 >= 0 && r1 < 8 && nc >= 0 && nc < 8) {
-                    const target = board[r1][nc];
-                    const isPromo = (color === 'w' && r1 === 0) || (color === 'b' && r1 === 7);
-                    if (target && target.color === oppColor) {
-                        moves.push({ row: r1, col: nc, capture: true, promotion: isPromo });
-                    }
-                    if (enPassantSquare && enPassantSquare.row === r1 && enPassantSquare.col === nc) {
-                        moves.push({ row: r1, col: nc, enPassant: true });
-                    }
+                if (!isOnBoard(r1, nc)) continue;
+
+                const target = board[r1][nc];
+                const isPromo = (color === 'w' && r1 === 0) || (color === 'b' && r1 === 7);
+
+                if (target && target.color === oppColor) {
+                    moves.push({ row: r1, col: nc, capture: true, promotion: isPromo });
+                }
+                if (enPassantSquare && enPassantSquare.row === r1 && enPassantSquare.col === nc) {
+                    moves.push({ row: r1, col: nc, enPassant: true });
                 }
             }
         } else if (piece.type === 'n') {
-            const knightMoves = [
-                [-2, -1], [-2, 1], [-1, -2], [-1, 2],
-                [1, -2], [1, 2], [2, -1], [2, 1]
-            ];
-            for (const [dr, dc] of knightMoves) {
-                addMove(row + dr, col + dc);
-            }
+            for (const [dr, dc] of KNIGHT_OFFSETS) addMove(row + dr, col + dc);
         } else if (piece.type === 'b' || piece.type === 'r' || piece.type === 'q') {
             const dirs = [];
-            if (piece.type === 'b' || piece.type === 'q') dirs.push([-1, -1], [-1, 1], [1, -1], [1, 1]);
-            if (piece.type === 'r' || piece.type === 'q') dirs.push([-1, 0], [1, 0], [0, -1], [0, 1]);
+            if (piece.type === 'b' || piece.type === 'q') dirs.push(...DIAGONAL_DIRS);
+            if (piece.type === 'r' || piece.type === 'q') dirs.push(...ORTHOGONAL_DIRS);
 
             for (const [dr, dc] of dirs) {
                 let r = row + dr;
                 let c = col + dc;
-                while (r >= 0 && r < 8 && c >= 0 && c < 8) {
+
+                while (isOnBoard(r, c)) {
                     const target = board[r][c];
+
                     if (!target) {
                         moves.push({ row: r, col: c });
                     } else {
-                        if (target.color !== color) {
-                            moves.push({ row: r, col: c, capture: true });
-                        }
+                        if (target.color !== color) moves.push({ row: r, col: c, capture: true });
                         break;
                     }
+
                     r += dr;
                     c += dc;
                 }
             }
         } else if (piece.type === 'k') {
-            const kingMoves = [
-                [-1, -1], [-1, 0], [-1, 1],
-                [0, -1], [0, 1],
-                [1, -1], [1, 0], [1, 1]
-            ];
-            for (const [dr, dc] of kingMoves) {
-                addMove(row + dr, col + dc);
-            }
+            for (const [dr, dc] of KING_OFFSETS) addMove(row + dr, col + dc);
 
             if (castling && castling[color]) {
                 const homeRow = color === 'w' ? 7 : 0;
+
                 if (row === homeRow && col === 4) {
                     if (castling[color].kingSide && !board[homeRow][5] && !board[homeRow][6]) {
                         if (!this.isSquareAttacked(homeRow, 4, oppColor, board) &&
@@ -193,28 +210,73 @@ export class ChessGame {
         return moves;
     }
 
-    isSquareAttacked(r, c, attackerColor, board) {
-        for (let row = 0; row < 8; row++) {
-            for (let col = 0; col < 8; col++) {
-                const piece = board[row][col];
-                if (piece && piece.color === attackerColor) {
-                    if (piece.type === 'k') {
-                        if (Math.abs(row - r) <= 1 && Math.abs(col - c) <= 1) return true;
-                    } else {
-                        const moves = this.getPseudoLegalMoves(row, col, board, null, null);
-                        if (moves.some(m => m.row === r && m.col === c)) return true;
-                    }
+    // Direct ray/offset inspection instead of generating every pseudo-legal move
+    // of every enemy piece, which used to allocate thousands of move objects per call.
+    isSquareAttacked(row, col, attackerColor, board = this.board) {
+        const pawnRow = attackerColor === 'w' ? row + 1 : row - 1;
+
+        for (const dc of [-1, 1]) {
+            if (!isOnBoard(pawnRow, col + dc)) continue;
+            const piece = board[pawnRow][col + dc];
+            if (piece && piece.color === attackerColor && piece.type === 'p') return true;
+        }
+
+        for (const [dr, dc] of KNIGHT_OFFSETS) {
+            const r = row + dr;
+            const c = col + dc;
+            if (!isOnBoard(r, c)) continue;
+
+            const piece = board[r][c];
+            if (piece && piece.color === attackerColor && piece.type === 'n') return true;
+        }
+
+        for (const [dr, dc] of KING_OFFSETS) {
+            const r = row + dr;
+            const c = col + dc;
+            if (!isOnBoard(r, c)) continue;
+
+            const piece = board[r][c];
+            if (piece && piece.color === attackerColor && piece.type === 'k') return true;
+        }
+
+        for (const [dr, dc] of ORTHOGONAL_DIRS) {
+            let r = row + dr;
+            let c = col + dc;
+
+            while (isOnBoard(r, c)) {
+                const piece = board[r][c];
+                if (piece) {
+                    if (piece.color === attackerColor && (piece.type === 'r' || piece.type === 'q')) return true;
+                    break;
                 }
+                r += dr;
+                c += dc;
             }
         }
+
+        for (const [dr, dc] of DIAGONAL_DIRS) {
+            let r = row + dr;
+            let c = col + dc;
+
+            while (isOnBoard(r, c)) {
+                const piece = board[r][c];
+                if (piece) {
+                    if (piece.color === attackerColor && (piece.type === 'b' || piece.type === 'q')) return true;
+                    break;
+                }
+                r += dr;
+                c += dc;
+            }
+        }
+
         return false;
     }
 
-    findKing(color, board) {
+    findKing(color, board = this.board) {
         for (let r = 0; r < 8; r++) {
             for (let c = 0; c < 8; c++) {
-                const p = board[r][c];
-                if (p && p.type === 'k' && p.color === color) {
+                const piece = board[r][c];
+                if (piece && piece.type === 'k' && piece.color === color) {
                     return { row: r, col: c };
                 }
             }
@@ -225,65 +287,48 @@ export class ChessGame {
     isInCheck(color, board = this.board) {
         const kingPos = this.findKing(color, board);
         if (!kingPos) return false;
-        const oppColor = color === 'w' ? 'b' : 'w';
-        return this.isSquareAttacked(kingPos.row, kingPos.col, oppColor, board);
-    }
 
-    resultsInCheck(fromRow, fromCol, toRow, toCol) {
-        const tempBoard = this.cloneBoard();
-        const piece = tempBoard[fromRow][fromCol];
-        tempBoard[toRow][toCol] = piece;
-        tempBoard[fromRow][fromCol] = null;
-
-        if (piece.type === 'p' && this.enPassantSquare && toRow === this.enPassantSquare.row && toCol === this.enPassantSquare.col) {
-            const capRow = piece.color === 'w' ? toRow + 1 : toRow - 1;
-            tempBoard[capRow][toCol] = null;
-        }
-
-        return this.isInCheck(piece.color, tempBoard);
+        return this.isSquareAttacked(kingPos.row, kingPos.col, color === 'w' ? 'b' : 'w', board);
     }
 
     makeMove(fromRow, fromCol, toRow, toCol, promotionPiece = 'q') {
         const piece = this.getPiece(fromRow, fromCol);
-        if (!piece) return false;
+        if (!piece || piece.color !== this.turn) return false;
 
-        const legalMoves = this.getLegalMoves(fromRow, fromCol);
-        const moveInfo = legalMoves.find(m => m.row === toRow && m.col === toCol);
+        const moveInfo = this.getLegalMoves(fromRow, fromCol).find(m => m.row === toRow && m.col === toCol);
         if (!moveInfo) return false;
 
-        // Save state for undo
+        const capturedPiece = this.board[toRow][toCol];
+        const isPawnMove = piece.type === 'p';
+        const isCapture = Boolean(capturedPiece) || Boolean(moveInfo.enPassant);
+
+        // Snapshot only what undo needs; the old code also copied the whole
+        // repetition Map on every single move.
         const prevState = {
             board: this.cloneBoard(),
             turn: this.turn,
-            castling: JSON.parse(JSON.stringify(this.castling)),
+            castling: {
+                w: { ...this.castling.w },
+                b: { ...this.castling.b }
+            },
             enPassantSquare: this.enPassantSquare ? { ...this.enPassantSquare } : null,
+            halfMoveClock: this.halfMoveClock,
             moveHistoryNotation: [...this.moveHistoryNotation],
-            positionCountsSnapshot: new Map(this.positionCounts)
+            addedPositionKey: null
         };
         this.history.push(prevState);
 
-        const capturedPiece = this.board[toRow][toCol];
         // Capturing a rook on its original square removes its castling right.
         if (capturedPiece?.type === 'r') {
             if (capturedPiece.color === 'w') {
-                if (toRow === 7 && toCol === 0) {
-                    this.castling.w.queenSide = false;
-                }
-
-                if (toRow === 7 && toCol === 7) {
-                    this.castling.w.kingSide = false;
-                }
+                if (toRow === 7 && toCol === 0) this.castling.w.queenSide = false;
+                if (toRow === 7 && toCol === 7) this.castling.w.kingSide = false;
             } else {
-                if (toRow === 0 && toCol === 0) {
-                    this.castling.b.queenSide = false;
-                }
-
-                if (toRow === 0 && toCol === 7) {
-                    this.castling.b.kingSide = false;
-                }
+                if (toRow === 0 && toCol === 0) this.castling.b.queenSide = false;
+                if (toRow === 0 && toCol === 7) this.castling.b.kingSide = false;
             }
         }
-        
+
         let notation = this.getAlgebraicNotation(fromRow, fromCol, toRow, toCol, piece, capturedPiece, moveInfo);
 
         this.board[toRow][toCol] = piece;
@@ -291,22 +336,19 @@ export class ChessGame {
 
         if (moveInfo.castling) {
             if (moveInfo.castling === 'k') {
-                const rookRow = toRow;
-                this.board[rookRow][5] = this.board[rookRow][7];
-                this.board[rookRow][7] = null;
-            } else if (moveInfo.castling === 'q') {
-                const rookRow = toRow;
-                this.board[rookRow][3] = this.board[rookRow][0];
-                this.board[rookRow][0] = null;
+                this.board[toRow][5] = this.board[toRow][7];
+                this.board[toRow][7] = null;
+            } else {
+                this.board[toRow][3] = this.board[toRow][0];
+                this.board[toRow][0] = null;
             }
         }
 
         if (moveInfo.enPassant) {
-            const capRow = piece.color === 'w' ? toRow + 1 : toRow - 1;
-            this.board[capRow][toCol] = null;
+            this.board[piece.color === 'w' ? toRow + 1 : toRow - 1][toCol] = null;
         }
 
-        if (piece.type === 'p' && Math.abs(fromRow - toRow) === 2) {
+        if (isPawnMove && Math.abs(fromRow - toRow) === 2) {
             this.enPassantSquare = { row: (fromRow + toRow) / 2, col: toCol };
         } else {
             this.enPassantSquare = null;
@@ -328,20 +370,15 @@ export class ChessGame {
             if (fromRow === 0 && fromCol === 7) this.castling.b.kingSide = false;
         }
 
+        this.halfMoveClock = isPawnMove || isCapture ? 0 : this.halfMoveClock + 1;
         this.turn = this.turn === 'w' ? 'b' : 'w';
 
-        // Register the new position key frequency
         const newKey = this.getPositionKey();
-        const currentCount = this.positionCounts.get(newKey) || 0;
-        this.positionCounts.set(newKey, currentCount + 1);
+        this.positionCounts.set(newKey, (this.positionCounts.get(newKey) || 0) + 1);
+        prevState.addedPositionKey = newKey;
 
-        const oppColor = this.turn;
-        if (this.isInCheck(oppColor)) {
-            if (this.isCheckmate(oppColor)) {
-                notation += '#';
-            } else {
-                notation += '+';
-            }
+        if (this.isInCheck(this.turn)) {
+            notation += this.hasNoLegalMoves(this.turn) ? '#' : '+';
         }
 
         this.moveHistoryNotation.push(notation);
@@ -350,103 +387,88 @@ export class ChessGame {
 
     undo() {
         if (this.history.length === 0) return false;
+
         const prevState = this.history.pop();
+
+        if (prevState.addedPositionKey) {
+            const count = this.positionCounts.get(prevState.addedPositionKey) || 0;
+            if (count <= 1) {
+                this.positionCounts.delete(prevState.addedPositionKey);
+            } else {
+                this.positionCounts.set(prevState.addedPositionKey, count - 1);
+            }
+        }
+
         this.board = prevState.board;
         this.turn = prevState.turn;
         this.castling = prevState.castling;
         this.enPassantSquare = prevState.enPassantSquare;
+        this.halfMoveClock = prevState.halfMoveClock;
         this.moveHistoryNotation = prevState.moveHistoryNotation;
-        this.positionCounts = prevState.positionCountsSnapshot;
         return true;
     }
 
     // --- Repetition & Game Status Checks ---
 
     getCurrentPositionRepetitionCount() {
-        const currentKey = this.getPositionKey();
-        return this.positionCounts.get(currentKey) || 1;
-    }
-
-    canClaimThreefoldRepetition() {
-        return this.getCurrentPositionRepetitionCount() >= 3;
-    }
-
-    isFivefoldRepetition() {
-        return this.getCurrentPositionRepetitionCount() >= 5;
+        return this.positionCounts.get(this.getPositionKey()) || 1;
     }
 
     isCheckmate(color) {
-        if (!this.isInCheck(color)) return false;
-        return this.hasNoLegalMoves(color);
+        return this.isInCheck(color) && this.hasNoLegalMoves(color);
     }
 
     isStalemate(color) {
-        if (this.isInCheck(color)) return false;
-        return this.hasNoLegalMoves(color);
+        return !this.isInCheck(color) && this.hasNoLegalMoves(color);
     }
 
     hasNoLegalMoves(color) {
         for (let r = 0; r < 8; r++) {
             for (let c = 0; c < 8; c++) {
                 const piece = this.board[r][c];
-                if (piece && piece.color === color) {
-                    const moves = this.getLegalMoves(r, c);
-                    if (moves.length > 0) return false;
-                }
+                if (piece && piece.color === color && this.getLegalMoves(r, c).length > 0) return false;
             }
         }
         return true;
     }
 
-    getAlgebraicNotation(fromRow, fromCol, toRow, toCol, piece, captured, moveInfo) {
-        if (moveInfo.castling === 'k') return 'O-O';
-        if (moveInfo.castling === 'q') return 'O-O-O';
+    // One pass to describe the position for the UI: game over, check, and why.
+    getGameState() {
+        const color = this.turn;
+        const check = this.isInCheck(color);
 
-        const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
-        const ranks = ['8', '7', '6', '5', '4', '3', '2', '1'];
-
-        const pSymbol = piece.type === 'p' ? '' : piece.type.toUpperCase();
-        const captureStr = (captured || moveInfo.enPassant) ? (piece.type === 'p' ? files[fromCol] + 'x' : 'x') : '';
-        const destStr = files[toCol] + ranks[toRow];
-
-        return `${pSymbol}${captureStr}${destStr}`;
-    }
-
-    getAllLegalMoves(color) {
-        const allMoves = [];
-        for (let r = 0; r < 8; r++) {
-            for (let c = 0; c < 8; c++) {
-                const p = this.board[r][c];
-                if (p && p.color === color) {
-                    const moves = this.getLegalMoves(r, c);
-                    for (const m of moves) {
-                        allMoves.push({ fromRow: r, fromCol: c, toRow: m.row, toCol: m.col, promotion: m.promotion, castling: m.castling, enPassant: m.enPassant });
-                    }
-                }
-            }
+        if (this.hasNoLegalMoves(color)) {
+            return {
+                over: true,
+                check,
+                message: check
+                    ? `Checkmate! ${color === 'w' ? 'Black' : 'White'} wins!`
+                    : "Stalemate! It's a draw.",
+                repetition: false
+            };
         }
-        return allMoves;
+
+        // Callers that recover from a repetition loop need to tell this draw
+        // apart from the permanent ones (75-move, insufficient material).
+        const repetition = this.getCurrentPositionRepetitionCount() >= 5;
+        const draw = this.isDraw();
+        if (draw) return { over: true, check, message: draw, repetition };
+
+        return { over: false, check, message: null, repetition: false };
     }
 
-    isDraw(game) {
+    isDraw() {
         // Automatic 75-move rule.
-        if ( Number.isFinite(game.halfMoveClock) && game.halfMoveClock >= 150 ) return true;
+        if (this.halfMoveClock >= 150) return 'Draw by the 75-move rule.';
 
         // Automatic fivefold repetition.
-        if (this.positionCounts instanceof Map) {
-            const key = this.positionKey(game);
-            const repetitions = this.positionCounts.get(key) ?? 0;
-
-            if (repetitions >= 5) {
-                return true;
-            }
-        }
+        if (this.getCurrentPositionRepetitionCount() >= 5) return 'Draw by fivefold repetition.';
 
         // Insufficient mating material.
-        return this.isInsufficientMaterial(game.board);
-    }
+        if (this.isInsufficientMaterial(this.board)) return 'Draw by insufficient material.';
 
-    
+        return null;
+    }
 
     isInsufficientMaterial(board) {
         const nonKings = [];
@@ -454,59 +476,62 @@ export class ChessGame {
         for (let row = 0; row < 8; row++) {
             for (let col = 0; col < 8; col++) {
                 const piece = board[row][col];
-                if (piece && piece.type !== 'k') {
-                    // Any pawn, rook or queen means mating material may exist.
-                    if (['p', 'r', 'q'].includes(piece.type)) return false;
-                    nonKings.push({ ...piece, row, col });
-                }
+                if (!piece || piece.type === 'k') continue;
+
+                // Any pawn, rook or queen means mating material may exist.
+                if (piece.type === 'p' || piece.type === 'r' || piece.type === 'q') return false;
+
+                nonKings.push({ type: piece.type, row, col });
             }
         }
 
         if (nonKings.length === 0) return true; // K vs K.
-        if (nonKings.length === 1) return true;  // K+B vs K or K+N vs K.
+        if (nonKings.length === 1) return true; // K+B vs K or K+N vs K.
 
         // Bishops only: if every bishop is on the same square colour,
         // checkmate is impossible.
         if (nonKings.every(piece => piece.type === 'b')) {
-            const squareColors = new Set(
-                nonKings.map(piece => (piece.row + piece.col) % 2)
-            );
+            const squareColors = new Set(nonKings.map(piece => (piece.row + piece.col) % 2));
             if (squareColors.size === 1) return true;
         }
 
         return false;
     }
 
+    getAlgebraicNotation(fromRow, fromCol, toRow, toCol, piece, captured, moveInfo) {
+        if (moveInfo.castling === 'k') return 'O-O';
+        if (moveInfo.castling === 'q') return 'O-O-O';
 
-     positionKey(game) {
-        if (typeof game.getPositionKey === 'function') {
-            try {
-                return game.getPositionKey(
-                    game.board,
-                    game.turn,
-                    game.castling,
-                    game.enPassantSquare
-                );
-            } catch {
-                // Fall through to a local key if the method signature differs.
+        const pSymbol = piece.type === 'p' ? '' : piece.type.toUpperCase();
+        const captureStr = captured || moveInfo.enPassant
+            ? (piece.type === 'p' ? FILES[fromCol] + 'x' : 'x')
+            : '';
+
+        return `${pSymbol}${captureStr}${FILES[toCol]}${RANKS[toRow]}`;
+    }
+
+    getAllLegalMoves(color) {
+        const allMoves = [];
+
+        for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 8; c++) {
+                const piece = this.board[r][c];
+                if (!piece || piece.color !== color) continue;
+
+                for (const move of this.getLegalMoves(r, c)) {
+                    allMoves.push({
+                        fromRow: r,
+                        fromCol: c,
+                        toRow: move.row,
+                        toCol: move.col,
+                        promotion: move.promotion,
+                        castling: move.castling,
+                        enPassant: move.enPassant
+                    });
+                }
             }
         }
 
-        const pieces = game.board.map(row => row.map(piece => {
-            if (!piece) return '--';
-            return `${piece.color}${piece.type}`;
-        }).join('')).join('/');
-
-        const rights = game.castling ?? DEFAULT_CASTLING;
-        const castlingKey = ['w', 'b'].map(color => {
-            const side = rights[color] ?? {};
-            return `${side.kingSide ? 'K' : '-'}${side.queenSide ? 'Q' : '-'}`;
-        }).join('');
-
-        const ep = this._parseSquare(game.enPassantSquare);
-        const epKey = ep ? this.squareName(ep.row, ep.col) : '-';
-
-        return `${pieces} ${game.turn} ${castlingKey} ${epKey}`;
+        return allMoves;
     }
-
 }

@@ -1,25 +1,19 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Grandmaster Chess (Single & Two-Player)</title>
     <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
     <div class="game-container">
         <!-- Header Section -->
         <header class="game-header">
-            <div class="timer-box" id="white-timer-box">
-                <span class="timer-label">White (Player 1)</span>
-                <span id="white-timer" class="timer">10:00</span>
-            </div>
             <div class="status-box">
-                <h2 id="game-status">Welcome! Click 'Start Game'</h2>
-            </div>
-            <div class="timer-box" id="black-timer-box">
-                <span class="timer-label" id="black-label">Black (Brian AI)</span>
-                <span id="black-timer" class="timer">10:00</span>
+                <h2 id="game-status">White to move</h2>
             </div>
         </header>
 
@@ -33,7 +27,6 @@
                 <div id="history-list" class="history-list"></div>
             </aside>
         </main>
-
         <!-- Footer Section -->
         <footer class="game-footer">
             <div class="mode-selector">
@@ -45,15 +38,18 @@
                 </select>
             </div>
             <div class="action-buttons">
-                <button id="start-btn" class="btn primary-btn">Start Game</button>
-                <button id="pause-btn" class="btn primary-btn">Pause Game</button>
-                <button id="undo-btn" class="btn secondary-btn" disabled>Undo Move</button>
-                <button id="new-btn" class="btn primary-btn">New Game</button>
                 <button id="train-btn" class="btn primary-btn">Train the model</button>
             </div>
         </footer>
+        <aside class="training-panel">
+    <h3>Training Performance Comparison</h3>
+    <div class="chart-container">
+        <canvas id="trainingChart"></canvas>
     </div>
-
+</aside>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script type="module" src="game.js"></script>
+    <script src="training.js"></script>
 </body>
 </html>

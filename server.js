@@ -4,6 +4,16 @@ const path = require('path');
 const PORT = 5500;
 const HOST = 'localhost';
 
+// Saved networks live here, one JSON file per side.
+const BRAIN_DIR = path.join(__dirname, 'brains');
+const BRAIN_COLORS = new Set(['white', 'black']);
+const MAX_BRAIN_BYTES = 8 * 1024 * 1024;
+
+// Training history: one CSV row per finished 1000-game run.
+const TRAINING_LOG = path.join(__dirname, 'training-log.csv');
+const TRAINING_HEADER = 'Training,black win,white win,draw,corrected,illegal move,empty square,repeated';
+const MAX_LOG_BYTES = 64 * 1024;
+
 // Map file extensions to correct MIME types (critical for ES6 modules)
 const MIME_TYPES = {
     '.html': 'text/html',
@@ -12,12 +22,284 @@ const MIME_TYPES = {
     '.json': 'application/json',
     '.png': 'image/png',
     '.jpg': 'image/jpeg',
-    '.ico': 'image/x-icon'
+    '.ico': 'image/x-icon',
+    '.csv': 'text/csv'
+};
+
+const sendJson = (res, status, payload) => {
+    const body = JSON.stringify(payload);
+    res.writeHead(status, {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body)
+    });
+    res.end(body);
+};
+
+// Write through a temporary file and rename it into place. A request that is
+// interrupted mid-write leaves the previous brain intact instead of truncating
+// brains/{color}.json to zero bytes.
+const writeFileAtomic = (filePath, data, callback) => {
+    const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+
+    fs.writeFile(tempPath, data, writeError => {
+        if (writeError) {
+            fs.unlink(tempPath, () => callback(writeError));
+            return;
+        }
+
+        fs.rename(tempPath, filePath, renameError => {
+            if (renameError) {
+                fs.unlink(tempPath, () => callback(renameError));
+                return;
+            }
+
+            callback(null);
+        });
+    });
+};
+
+// GET /api/brains/{white|black} -> saved weights
+// POST /api/brains/{white|black} -> persist weights to brains/{color}.json
+const handleBrainRequest = (req, res, color) => {
+    const filePath = path.join(BRAIN_DIR, `${color}.json`);
+
+    if (req.method === 'GET') {
+        fs.readFile(filePath, 'utf-8', (err, content) => {
+            if (err) {
+                return sendJson(res, err.code === 'ENOENT' ? 404 : 500, {
+                    error: err.code === 'ENOENT' ? `No saved ${color} brain yet` : err.code
+                });
+            }
+
+            // An interrupted older write could leave an empty file. Treat it
+            // as "nothing saved" so training starts fresh and the next save
+            // repairs the file, instead of making the client fall back to
+            // browser storage permanently.
+            if (!content.trim()) {
+                return sendJson(res, 404, { error: `No saved ${color} brain yet` });
+            }
+
+            try {
+                sendJson(res, 200, JSON.parse(content));
+            } catch {
+                sendJson(res, 404, { error: `Saved ${color} brain is not valid JSON` });
+            }
+        });
+        return;
+    }
+
+    if (req.method !== 'POST') {
+        res.setHeader('Allow', 'GET, POST');
+        sendJson(res, 405, { error: 'Method not allowed' });
+        return;
+    }
+
+    const chunks = [];
+    let size = 0;
+    let aborted = false;
+
+    req.on('data', chunk => {
+        if (aborted) return;
+
+        size += chunk.length;
+        if (size > MAX_BRAIN_BYTES) {
+            aborted = true;
+            req.destroy();
+            sendJson(res, 413, { error: 'Brain file is too large' });
+            return;
+        }
+
+        chunks.push(chunk);
+    });
+
+    req.on('error', () => {
+        if (!aborted) {
+            aborted = true;
+            sendJson(res, 500, { error: 'Upload failed' });
+        }
+    });
+
+    req.on('end', () => {
+        if (aborted) return;
+
+        let brain;
+        try {
+            brain = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
+        } catch {
+            sendJson(res, 400, { error: 'Body must be JSON' });
+            return;
+        }
+
+        if (!brain || !Array.isArray(brain.shape) || !Array.isArray(brain.layers)) {
+            sendJson(res, 400, { error: 'Not a serialized neural network' });
+            return;
+        }
+
+        fs.mkdir(BRAIN_DIR, { recursive: true }, mkdirError => {
+            if (mkdirError) {
+                sendJson(res, 500, { error: mkdirError.code });
+                return;
+            }
+
+            writeFileAtomic(filePath, JSON.stringify(brain), writeError => {
+                if (writeError) {
+                    sendJson(res, 500, { error: writeError.code });
+                    return;
+                }
+
+                sendJson(res, 200, { saved: `brains/${color}.json` });
+            });
+        });
+    });
+};
+
+const TRAINING_COLUMNS = TRAINING_HEADER.split(',').length;
+
+const countTrainingSessions = csv =>
+    Math.max(0, csv.split(/\r?\n/).filter(line => line.trim() !== '').length - 1);
+
+// Early logs had only four columns. Keep their rows and pad the new counters
+// with zeroes, so a file always carries one consistent header.
+const normalizeTrainingCsv = csv => {
+    const lines = String(csv ?? '').split(/\r?\n/).filter(line => line.trim() !== '');
+    if (lines.length === 0) return `${TRAINING_HEADER}\n`;
+
+    if (lines[0].trim() !== TRAINING_HEADER) {
+        lines[0] = TRAINING_HEADER;
+        for (let i = 1; i < lines.length; i++) {
+            const cells = lines[i].split(',');
+            while (cells.length < TRAINING_COLUMNS) cells.push('0');
+            lines[i] = cells.slice(0, TRAINING_COLUMNS).join(',');
+        }
+    }
+
+    return `${lines.join('\n')}\n`;
+};
+
+const readTrainingCsv = () => {
+    try {
+        return normalizeTrainingCsv(fs.readFileSync(TRAINING_LOG, 'utf-8'));
+    } catch {
+        return `${TRAINING_HEADER}\n`;
+    }
+};
+
+// GET /api/training-log -> CSV session history
+// POST /api/training-log { black, white, draws, corrected, illegal, empty, repeated }
+// -> append one session row
+const handleTrainingLogRequest = (req, res) => {
+    if (req.method === 'GET') {
+        const csv = readTrainingCsv();
+        res.writeHead(200, {
+            'Content-Type': 'text/csv; charset=utf-8',
+            'Content-Length': Buffer.byteLength(csv),
+            'Cache-Control': 'no-store'
+        });
+        res.end(csv);
+        return;
+    }
+
+    if (req.method !== 'POST') {
+        res.setHeader('Allow', 'GET, POST');
+        sendJson(res, 405, { error: 'Method not allowed' });
+        return;
+    }
+
+    const chunks = [];
+    let size = 0;
+    let aborted = false;
+
+    req.on('data', chunk => {
+        if (aborted) return;
+
+        size += chunk.length;
+        if (size > MAX_LOG_BYTES) {
+            aborted = true;
+            req.destroy();
+            sendJson(res, 413, { error: 'Training result is too large' });
+            return;
+        }
+
+        chunks.push(chunk);
+    });
+
+    req.on('error', () => {
+        if (!aborted) {
+            aborted = true;
+            sendJson(res, 500, { error: 'Upload failed' });
+        }
+    });
+
+    req.on('end', () => {
+        if (aborted) return;
+
+        let result;
+        try {
+            result = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
+        } catch {
+            sendJson(res, 400, { error: 'Body must be JSON' });
+            return;
+        }
+
+        const values = [
+            result?.black,
+            result?.white,
+            result?.draws,
+            result?.corrected ?? 0,
+            result?.illegal ?? 0,
+            result?.empty ?? 0,
+            result?.repeated ?? 0
+        ];
+        if (!values.every(value => Number.isInteger(value) && value >= 0)) {
+            sendJson(res, 400, {
+                error: 'black, white, draws, corrected, illegal, empty and repeated must be non-negative integers'
+            });
+            return;
+        }
+
+        // Rewrite rather than append so an old four-column file is upgraded to
+        // the current header before the new row lands.
+        const existing = readTrainingCsv();
+        const session = countTrainingSessions(existing) + 1;
+
+        try {
+            fs.writeFileSync(TRAINING_LOG, `${existing}${session},${values.join(',')}\n`);
+        } catch (error) {
+            sendJson(res, 500, { error: error.code || 'Could not write the training log' });
+            return;
+        }
+
+        sendJson(res, 200, { saved: 'training-log.csv', session });
+    });
 };
 
 const server = http.createServer((req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host || HOST}`);
+
+    if (url.pathname === '/api/training-log') {
+        handleTrainingLogRequest(req, res);
+        return;
+    }
+
+    const brainMatch = url.pathname.match(/^\/api\/brains\/([^/]+)$/);
+
+    if (brainMatch) {
+        const color = decodeURIComponent(brainMatch[1]);
+
+        if (!BRAIN_COLORS.has(color)) {
+            sendJson(res, 404, { error: 'Unknown brain color' });
+            return;
+        }
+
+        handleBrainRequest(req, res, color);
+        return;
+    }
+
     // Normalize URL path
-    let filePath = path.join(__dirname, req.url === '/' ? 'index.html' : req.url);
+    let filePath = path.join(
+        __dirname,
+        url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname)
+    );
     let extname = path.extname(filePath);
     let contentType = MIME_TYPES[extname] || 'application/octet-stream';
 

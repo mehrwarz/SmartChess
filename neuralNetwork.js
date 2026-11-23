@@ -5,6 +5,8 @@ export class Layer {
 
         this.inputs = new Float32Array(inputCount);
         this.outputs = new Float32Array(outputCount);
+        // Reused by NeuralNetwork.train for the backward pass.
+        this.errors = new Float32Array(outputCount);
         this.biases = new Float32Array(outputCount);
 
         // Flat weight matrix
@@ -74,16 +76,133 @@ export class NeuralNetwork {
         }
     }
 
-    predict(inputs) {
+    predictRaw(inputs) {
         let output = inputs;
 
         for (let i = 0; i < this.layers.length; i++) {
             output = Layer.feedForward(output, this.layers[i]);
         }
 
-        return output.map(o => Math.ceil(o * 7));
+        return Array.from(output);
     }
 
+    predict(inputs) {
+        // Sigmoid outputs land in (0, 1); round into board coordinates 0-7.
+        return this.predictRaw(inputs)
+            .map(o => Math.min(7, Math.max(0, Math.round(o * 7))));
+    }
+
+    // One gradient step over every layer toward four target coordinates (0-7).
+    // The old version only touched the output layer, which cannot change what
+    // the hidden layers detect, so training never improved the policy. This is
+    // full backprop: sigmoid derivative on the output, ReLU derivative on the
+    // hidden layers, plain MSE loss on target/7.
+    train(inputs, target, rate = 0.05) {
+        let activation = inputs;
+
+        for (const layer of this.layers) {
+            layer.inputs.set(activation);
+            activation = Layer.feedForward(activation, layer);
+        }
+
+        const outputLayer = this.layers[this.layers.length - 1];
+        let errors = outputLayer.errors;
+
+        for (let i = 0; i < outputLayer.outputCount; i++) {
+            const output = outputLayer.outputs[i];
+            // d(0.5 * (output - target)^2)/dz for a sigmoid output.
+            errors[i] = (target[i] / 7 - output) * output * (1 - output);
+        }
+
+        // Walk backwards. Deltas for the previous layer are computed from the
+        // pre-update weights, then this layer is nudged along its own deltas.
+        for (let l = this.layers.length - 1; l >= 0; l--) {
+            const layer = this.layers[l];
+
+            if (l > 0) {
+                const previous = this.layers[l - 1];
+                const previousErrors = previous.errors;
+
+                for (let j = 0; j < previous.outputCount; j++) {
+                    let sum = 0;
+
+                    // ReLU derivative: 0 where the unit is switched off.
+                    if (previous.outputs[j] > 0) {
+                        for (let i = 0; i < layer.outputCount; i++) {
+                            sum += errors[i] * layer.weights[j * layer.outputCount + i];
+                        }
+                    }
+
+                    previousErrors[j] = sum;
+                }
+            }
+
+            const layerInputs = layer.inputs;
+
+            for (let i = 0; i < layer.outputCount; i++) {
+                const error = errors[i];
+                if (error === 0) continue;
+
+                const delta = error * rate;
+                layer.biases[i] += delta;
+
+                let weightIndex = i;
+                for (let j = 0; j < layer.inputCount; j++) {
+                    layer.weights[weightIndex] += delta * layerInputs[j];
+                    weightIndex += layer.outputCount;
+                }
+            }
+
+            errors = l > 0 ? this.layers[l - 1].errors : errors;
+        }
+    }
+
+    // Plain-JSON form so a brain can be written to disk and reloaded later.
+    // Weights are rounded slightly to keep the file small.
+    toJSON() {
+        return {
+            shape: [this.layers[0].inputCount, ...this.layers.map(layer => layer.outputCount)],
+            layers: this.layers.map(layer => ({
+                weights: Array.from(layer.weights, weight => Number(weight.toFixed(5))),
+                biases: Array.from(layer.biases, bias => Number(bias.toFixed(5)))
+            }))
+        };
+    }
+
+    static fromJSON(data) {
+        if (!data || !Array.isArray(data.shape) || !Array.isArray(data.layers)) {
+            throw new Error("Brain file must contain a shape and layers.");
+        }
+
+        const network = new NeuralNetwork(data.shape);
+
+        if (data.layers.length !== network.layers.length) {
+            throw new Error("Brain file does not match the network shape.");
+        }
+
+        for (let i = 0; i < network.layers.length; i++) {
+            const layer = network.layers[i];
+            const saved = data.layers[i];
+
+            if (!saved ||
+                !Array.isArray(saved.weights) ||
+                !Array.isArray(saved.biases) ||
+                saved.weights.length !== layer.weights.length ||
+                saved.biases.length !== layer.biases.length) {
+                throw new Error(`Brain file layer ${i} does not match the network shape.`);
+            }
+
+            layer.weights.set(saved.weights);
+            layer.biases.set(saved.biases);
+        }
+
+        return network;
+    }
+
+    // Copies the parent's weights and biases, then nudges both. Mutating only
+    // the weights used to drop every bias the champion had learned, so each
+    // challenger started with zeroed biases and was not really a copy of the
+    // champion.
     mutate(parent, mutationRate = 0.01) {
         for (let i = 0; i < this.layers.length; i++) {
             const childWeights = this.layers[i].weights;
@@ -93,6 +212,27 @@ export class NeuralNetwork {
                 childWeights[j] =
                     parentWeights[j] +
                     (Math.random() * 2 - 1) * mutationRate;
+            }
+
+            const childBiases = this.layers[i].biases;
+            const parentBiases = parent.layers[i].biases;
+
+            for (let j = 0; j < childBiases.length; j++) {
+                childBiases[j] =
+                    parentBiases[j] +
+                    (Math.random() * 2 - 1) * mutationRate;
+            }
+        }
+
+        return this;
+    }
+
+    // Bias-only mutation, used to break a drawing line without disturbing the
+    // weights that encode the champion's policy.
+    mutateBiases(mutationRate = 0.01) {
+        for (const layer of this.layers) {
+            for (let i = 0; i < layer.biases.length; i++) {
+                layer.biases[i] += (Math.random() * 2 - 1) * mutationRate;
             }
         }
 
@@ -115,65 +255,3 @@ export class NeuralNetwork {
         return child;
     }
 }
-
-
-export function initBoard() {
-  const pieces = {
-    w: {
-      p: [0, 0, 0, 1],
-      n: [0, 0, 1, 0],
-      b: [0, 0, 1, 1],
-      r: [0, 1, 0, 0],
-      q: [0, 1, 0, 1],
-      k: [0, 1, 1, 0],
-    },
-    b: {
-      p: [1, 0, 0, 1],
-      n: [1, 0, 1, 0],
-      b: [1, 0, 1, 1],
-      r: [1, 1, 0, 0],
-      q: [1, 1, 0, 1],
-      k: [1, 1, 1, 0],
-    },
-  };
-
-  const layout = ["r", "n", "b", "q", "k", "b", "n", "r"];
-
-  // 64 squares * 4 bits
-  // 16 en passant flags + 5 additional features
-  const board = new Uint8Array(277);
-
-  let offset = 0;
-
-  // Black back rank
-  for (let i = 0; i < 8; i++) {
-    board.set(pieces.b[layout[i]], offset);
-    offset += 4;
-  }
-
-  // Black pawns
-  for (let i = 0; i < 8; i++) {
-    board.set(pieces.b.p, offset);
-    offset += 4;
-  }
-
-  // Empty squares are already initialized to zero.
-  offset += 128;
-
-  // White pawns
-  for (let i = 0; i < 8; i++) {
-    board.set(pieces.w.p, offset);
-    offset += 4;
-  }
-
-  // White back rank
-  for (let i = 0; i < 8; i++) {
-    board.set(pieces.w[layout[i]], offset);
-    offset += 4;
-  }
-
-  return board;
-}
-
-
-// const squareIndex = (row * 8 + col) * 4;

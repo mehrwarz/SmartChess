@@ -1,0 +1,9 @@
+node_modules/
+npm-debug.log*
+.DS_Store
+
+# Trained networks written by the brain save API
+brains/
+
+# Training history written by the log API
+training-log.csv
