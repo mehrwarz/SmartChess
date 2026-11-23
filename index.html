@@ -39,18 +39,19 @@
             </div>
             <div class="action-buttons">
                 <button id="train-btn" class="btn primary-btn">Train the model</button>
-                <button id="update-btn" class="btn primary-btn" onclick="loadTrainingData">Update Data</button>
+                <button id="update-btn" class="btn primary-btn" onclick="loadTrainingData">Run 10k Training</button>
             </div>
         </footer>
-        <aside class="training-panel">
-    <h3>Training Performance Comparison</h3>
-    <div class="chart-container">
-        <canvas id="trainingChart"></canvas>
-    </div>
-</aside>
+        <div class="training-panel">
+            <h3>Training Performance Comparison</h3>
+            <div class="chart-container">
+                <canvas id="trainingChart"></canvas>
+            </div>
+        </div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script type="module" src="game.js"></script>
     <script src="training.js"></script>
 </body>
+
 </html>

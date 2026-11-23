@@ -302,26 +302,6 @@ body {
 }
 
 .training-panel {
-    flex: 1;
-    min-width: 350px;
-    max-width: 750px;
-
-    padding: 15px;
-
-    background: #1e293b;
-    border-radius: 12px;
-
-    color: white;
-}
-
-.chart-container {
-    position: relative;
-
-    width: 100%;
-    height: 450px;
-}
-
-.training-panel {
     width: 100%;
     min-width: 0;
     padding: 20px;

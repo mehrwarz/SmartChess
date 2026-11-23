@@ -4,6 +4,7 @@ export class ChessUI {
         this.statusElement = document.getElementById('game-status');
         this.historyListElement = document.getElementById('history-list');
         this.trainBtn = document.getElementById('train-btn');
+        this.updateBtn = document.getElementById('update-btn');
         this.modeSelector = document.getElementById('game-mode');
 
         this.pieceSymbols = {
@@ -37,6 +38,7 @@ export class ChessUI {
                     const pieceSpan = document.createElement('span');
                     pieceSpan.className = 'piece';
                     pieceSpan.textContent = this.pieceSymbols[piece.color][piece.type];
+                    if(piece.color === "w") pieceSpan.style.color = "#bd5b06"
                     square.appendChild(pieceSpan);
                 }
 
