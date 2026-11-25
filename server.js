@@ -409,8 +409,6 @@ const handleBrainArchiveRequest = (req, res) => {
     if (
       !snapshot ||
       typeof snapshot.timestamp !== "string" ||
-      !Number.isInteger(snapshot.games) ||
-      snapshot.games < 1 ||
       typeof snapshot.score !== "number" ||
       !Number.isFinite(snapshot.score) ||
       snapshot.score < 0 ||

@@ -195,13 +195,11 @@ export class NeuralNetwork {
                             sum += errors[i] * layer.weights[j * layer.outputCount + i];
                         }
                     }
-
                     previousErrors[j] = sum;
                 }
             }
 
             const layerInputs = layer.inputs;
-
             for (let i = 0; i < layer.outputCount; i++) {
                 const error = errors[i];
                 if (error === 0) continue;

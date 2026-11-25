@@ -16,7 +16,7 @@ const MAX_TRAINING_PLIES = 200;
 // Number of challenges.
 // Each challenge consists of TWO games.
 const TRAINING_CYCLES = 500;
-const PLAYER1_MUTATION_RATE = 0.015;
+const PLAYER1_MUTATION_RATE = 0.0015;
 const DRAW_BIAS_RATE = 0.001;
 const MAX_DRAW_DRIFT = 0.001;
 const CAPTURE_LEARNING_RATE = 0.001;
@@ -270,7 +270,6 @@ function archiveBrain(brain, score) {
             score,
             brain: brain.toJSON(),
         };
-
         try {
             const response = await fetch(BRAIN_ARCHIVE_ENDPOINT, {
                 method: "POST",
@@ -957,7 +956,6 @@ export class GameManager {
         challengesPlayed, gamesPlayed, started, promotionsCount, }) {
         const seconds = (performance.now() - started) / 1000;
         const results = this.trainingResults;
-        const saved = await saveBestBrain(this.bestBrain);
 
         await logTrainingSession(
             results.player1,
@@ -981,8 +979,6 @@ export class GameManager {
             `Player2 wins: ${results.player2}\n` +
             `Draws: ${results.draws}\n\n` +
             `New champions: ${promotionsCount}\n` +
-            `Best Brain saved: ${saved ?? "failed"}\n` +
-            `Archive: ${archived ?? "failed"}\n\n` +
             `Illegal moves: ${this.trainingStats["illegal-move"]}\n` +
             `Empty squares: ${this.trainingStats["empty-square"]}\n` +
             `Wrong side: ${this.trainingStats["wrong-side"]}\n` +
