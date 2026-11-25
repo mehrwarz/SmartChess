@@ -16,8 +16,7 @@ const MAX_ARCHIVE_ENTRIES = 10000;
 
 // Training history: one CSV row per finished 1000-game run.
 const TRAINING_LOG = path.join(__dirname, "training-log.csv");
-const TRAINING_HEADER =
-  "Training,black win,white win,draw,corrected,illegal move,empty square,repeated";
+const TRAINING_LOG_HEADER = "Training,Player1 wins,Player2 wins,Draws,Corrected,Illegal move,Empty square,Repeated, Champion Changes";
 const MAX_LOG_BYTES = 64 * 1024;
 
 // Map file extensions to correct MIME types (critical for ES6 modules)
@@ -160,7 +159,7 @@ const handleBrainRequest = (req, res, color) => {
   });
 };
 
-const TRAINING_COLUMNS = TRAINING_HEADER.split(",").length;
+const TRAINING_COLUMNS = TRAINING_LOG_HEADER.split(",").length;
 
 const countTrainingSessions = (csv) =>
   Math.max(
@@ -174,10 +173,10 @@ const normalizeTrainingCsv = (csv) => {
   const lines = String(csv ?? "")
     .split(/\r?\n/)
     .filter((line) => line.trim() !== "");
-  if (lines.length === 0) return `${TRAINING_HEADER}\n`;
+  if (lines.length === 0) return `${TRAINING_LOG_HEADER}\n`;
 
-  if (lines[0].trim() !== TRAINING_HEADER) {
-    lines[0] = TRAINING_HEADER;
+  if (lines[0].trim() !== TRAINING_LOG_HEADER) {
+    lines[0] = TRAINING_LOG_HEADER;
     for (let i = 1; i < lines.length; i++) {
       const cells = lines[i].split(",");
       while (cells.length < TRAINING_COLUMNS) cells.push("0");
@@ -192,7 +191,7 @@ const readTrainingCsv = () => {
   try {
     return normalizeTrainingCsv(fs.readFileSync(TRAINING_LOG, "utf-8"));
   } catch {
-    return `${TRAINING_HEADER}\n`;
+    return `${TRAINING_LOG_HEADER}\n`;
   }
 };
 
@@ -202,76 +201,106 @@ const readTrainingCsv = () => {
 const handleTrainingLogRequest = (req, res) => {
   if (req.method === "GET") {
     const csv = readTrainingCsv();
+
     res.writeHead(200, {
       "Content-Type": "text/csv; charset=utf-8",
       "Content-Length": Buffer.byteLength(csv),
       "Cache-Control": "no-store",
     });
+
     res.end(csv);
     return;
+
   }
 
-  if (req.method !== "POST") {
-    res.setHeader("Allow", "GET, POST");
-    sendJson(res, 405, { error: "Method not allowed" });
-    return;
-  }
+  if (req.method !== "POST") { res.setHeader("Allow", "GET, POST"); sendJson(res, 405, { error: "Method not allowed" }); return; }
 
-  const chunks = [];
-  let size = 0;
-  let aborted = false;
+  const chunks = []; let size = 0; let aborted = false;
 
   req.on("data", (chunk) => {
     if (aborted) return;
 
     size += chunk.length;
+
     if (size > MAX_LOG_BYTES) {
       aborted = true;
-      req.destroy();
-      sendJson(res, 413, { error: "Training result is too large" });
+      req.resume();
+
+      sendJson(res, 413, {
+        error: "Training result is too large",
+      });
+
       return;
     }
 
     chunks.push(chunk);
+
   });
 
   req.on("error", () => {
     if (!aborted) {
       aborted = true;
-      sendJson(res, 500, { error: "Upload failed" });
+
+      sendJson(res, 500, {
+        error: "Upload failed",
+      });
     }
+
   });
 
   req.on("end", () => {
     if (aborted) return;
 
     let result;
+
     try {
-      result = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+      result = JSON.parse(
+        Buffer.concat(chunks).toString("utf-8")
+      );
     } catch {
-      sendJson(res, 400, { error: "Body must be JSON" });
+      sendJson(res, 400, {
+        error: "Body must be valid JSON",
+      });
+
       return;
     }
 
     const values = [
-      result?.black,
-      result?.white,
+      result?.player1,
+      result?.player2,
       result?.draws,
       result?.corrected ?? 0,
       result?.illegal ?? 0,
       result?.empty ?? 0,
       result?.repeated ?? 0,
+      result?.championChanges??0,
     ];
-    if (!values.every((value) => Number.isInteger(value) && value >= 0)) {
-      sendJson(res, 400, {
-        error:
-          "black, white, draws, corrected, illegal, empty and repeated must be non-negative integers",
-      });
-      return;
+
+    const names = [
+      "player1",
+      "player2",
+      "draws",
+      "corrected",
+      "illegal",
+      "empty",
+      "repeated",
+      "championChanges"
+    ];
+
+    for (let i = 0; i < values.length; i++) {
+      if (
+        !Number.isInteger(values[i]) ||
+        values[i] < 0
+      ) {
+        sendJson(res, 400, {
+          error: `Invalid training value: ${names[i]}`,
+          received: values[i] ?? null,
+        });
+
+        return;
+      }
     }
 
-    // Rewrite rather than append so an old four-column file is upgraded to
-    // the current header before the new row lands.
     const existing = readTrainingCsv();
     const session = countTrainingSessions(existing) + 1;
 
@@ -282,12 +311,17 @@ const handleTrainingLogRequest = (req, res) => {
       );
     } catch (error) {
       sendJson(res, 500, {
-        error: error.code || "Could not write the training log",
+        error: error.code || "Could not write training log",
       });
+
       return;
     }
 
-    sendJson(res, 200, { saved: "training-log.csv", session });
+    sendJson(res, 200, {
+      saved: "training-log.csv",
+      session,
+    });
+
   });
 };
 
@@ -415,7 +449,7 @@ const handleBrainArchiveRequest = (req, res) => {
       return archive.length;
     });
 
-    archiveWriteQueue = operation.catch(() => {});
+    archiveWriteQueue = operation.catch(() => { });
 
     operation
       .then((count) => {

@@ -1,15 +1,24 @@
 <!DOCTYPE html>
 <html lang="en">
-
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Grandmaster Chess (Single & Two-Player)</title>
-    <link rel="stylesheet" href="style.css">
+    
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Grandmaster Chess (Single & Two-Player)</title>
+        <link rel="stylesheet" href="style.css">
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script type="module" src="game.js"></script>
+        <script type="module" src="training.js"></script>
 </head>
 
 <body>
     <div class="game-container">
+        <div class="training-panel">
+            <h3>Training Performance Comparison</h3>
+            <div class="chart-container">
+                <canvas id="trainingChart"></canvas>
+            </div>
+        </div>
         <!-- Header Section -->
         <header class="game-header">
             <div class="status-box">
@@ -38,20 +47,11 @@
                 </select>
             </div>
             <div class="action-buttons">
-                <button id="train-btn" class="btn primary-btn">Train the model</button>
-                <button id="update-btn" class="btn primary-btn" onclick="loadTrainingData">Run 10k Training</button>
+                <button id="train-btn" class="btn primary-btn">Run 1K Training</button>
+                <button id="update-btn" class="btn primary-btn" onclick="loadTrainingData">Run 100K Training</button>
             </div>
         </footer>
-        <div class="training-panel">
-            <h3>Training Performance Comparison</h3>
-            <div class="chart-container">
-                <canvas id="trainingChart"></canvas>
-            </div>
-        </div>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script type="module" src="game.js"></script>
-    <script src="training.js"></script>
 </body>
 
 </html>

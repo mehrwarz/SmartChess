@@ -48,21 +48,57 @@ export class Layer {
             activation,
         } = layer;
 
+        if (!givenInputs || givenInputs.length !== inputCount) {
+            throw new Error(
+                `Invalid network input: expected ${inputCount}, received ${givenInputs?.length}.`
+            );
+        }
+
+        for (let j = 0; j < inputCount; j++) {
+            if (!Number.isFinite(givenInputs[j])) {
+                throw new Error(
+                    `Invalid input at index ${j}: ${givenInputs[j]}`
+                );
+            }
+        }
+
         for (let i = 0; i < outputCount; i++) {
             let sum = biases[i];
             let weightIndex = i;
 
+            if (!Number.isFinite(sum)) {
+                throw new Error(`Invalid bias at neuron ${i}.`);
+            }
+
             for (let j = 0; j < inputCount; j++) {
-                sum += givenInputs[j] * weights[weightIndex];
+                const weight = weights[weightIndex];
+
+                if (!Number.isFinite(weight)) {
+                    throw new Error(`Invalid weight at index ${weightIndex}.`);
+                }
+
+                sum += givenInputs[j] * weight;
                 weightIndex += outputCount;
             }
 
-            outputs[i] = activation === "relu" ? Math.max(0, sum)
-                : activation === "sigmoid" ? 1 / (1 + Math.exp(-sum)) : sum;
+            if (!Number.isFinite(sum)) {
+                throw new Error(
+                    `NaN detected during feedforward at neuron ${i}.`
+                );
+            }
+
+            if (activation === "relu") {
+                outputs[i] = Math.max(0, sum);
+            } else if (activation === "sigmoid") {
+                outputs[i] = 1 / (1 + Math.exp(-sum));
+            } else {
+                outputs[i] = sum;
+            }
         }
 
         return outputs;
     }
+
 }
 
 
@@ -72,7 +108,7 @@ export class NeuralNetwork {
 
         for (let i = 0; i < this.layers.length; i++) {
             const activation = i === this.layers.length - 1 ? "sigmoid" : "relu";
-            this.layers[i] = new Layer(neuronCounts[i], neuronCounts[i + 1], activation );
+            this.layers[i] = new Layer(neuronCounts[i], neuronCounts[i + 1], activation);
         }
     }
 
@@ -87,10 +123,17 @@ export class NeuralNetwork {
     }
 
     predict(inputs) {
-        // Sigmoid outputs land in (0, 1); round into board coordinates 0-7.
-        return this.predictRaw(inputs)
-            .map(o => Math.min(7, Math.max(0, Math.round(o * 7))));
+        const raw = this.predictRaw(inputs);
+
+        if (raw.length !== 5) {
+            throw new Error("Expected exactly 5 network outputs.");
+        }
+
+        return [...raw.slice(0, 4).map(value => Math.min(7, Math.max(0, Math.round(value * 7)))),
+        Math.min(3, Math.max(0, Math.round(raw[4] * 3)))
+        ];
     }
+
 
     // One gradient step over every layer toward four target coordinates (0-7).
     // The old version only touched the output layer, which cannot change what
@@ -98,6 +141,25 @@ export class NeuralNetwork {
     // full backprop: sigmoid derivative on the output, ReLU derivative on the
     // hidden layers, plain MSE loss on target/7.
     train(inputs, target, rate = 0.05) {
+        if (
+            !inputs ||
+            inputs.length !== this.layers[0].inputCount
+        ) {
+            throw new Error("Invalid training input size.");
+        }
+
+        if (!target || target.length !== 5) {
+            throw new Error("Invalid training target.");
+        }
+
+        for (let i = 0; i < target.length; i++) {
+            if (!Number.isFinite(target[i])) {
+                throw new Error(
+                    `Invalid training target at index ${i}.`
+                );
+            }
+        }
+
         let activation = inputs;
 
         for (const layer of this.layers) {
@@ -111,7 +173,8 @@ export class NeuralNetwork {
         for (let i = 0; i < outputLayer.outputCount; i++) {
             const output = outputLayer.outputs[i];
             // d(0.5 * (output - target)^2)/dz for a sigmoid output.
-            errors[i] = (target[i] / 7 - output) * output * (1 - output);
+            const targetScale = i === 4 ? 3 : 7;
+            errors[i] = (target[i] / targetScale - output) * output * (1 - output);
         }
 
         // Walk backwards. Deltas for the previous layer are computed from the
@@ -192,6 +255,14 @@ export class NeuralNetwork {
                 throw new Error(`Brain file layer ${i} does not match the network shape.`);
             }
 
+            if (
+                !saved.weights.every(Number.isFinite) ||
+                !saved.biases.every(Number.isFinite)
+            ) {
+                throw new Error(
+                    `Brain file contains invalid numbers in layer ${i}.`
+                );
+            }
             layer.weights.set(saved.weights);
             layer.biases.set(saved.biases);
         }

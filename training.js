@@ -1,6 +1,6 @@
 let trainingChart = null;
 
-async function loadTrainingData() {
+export async function loadTrainingData() {
     try {
         const response = await fetch("./training-log.csv");
 
@@ -38,6 +38,7 @@ async function loadTrainingData() {
     }
 }
 
+
 function createTrainingChart(data) {
     const canvas = document.getElementById("trainingChart");
 
@@ -50,15 +51,15 @@ function createTrainingChart(data) {
         console.error("Chart.js library was not loaded!");
         return;
     }
-
     const metrics = [
-        { column: "black win", label: "Black Wins", color: "#ef4444" },
-        { column: "white win", label: "White Wins", color: "#22c540" },
-        { column: "draw", label: "Draws", color: "#eab308" },
-        { column: "corrected", label: "Corrected", color: "#1815f2" },
-        { column: "illegal move", label: "Illegal Moves", color: "#f97316" },
-        { column: "empty square", label: "Empty Squares", color: "#a855f7" },
-        { column: "repeated", label: "Repeated Moves", color: "#17a3f5" }
+        { column: "Player1 wins", label: "Player1 Wins", color: "#ef4444" },
+        { column: "Player2 wins", label: "Player2 Wins", color: "#22c540" },
+        { column: "Draws", label: "Draws", color: "#eab308" },
+        { column: "Corrected", label: "Corrected", color: "#1815f2" },
+        { column: "Illegal move", label: "Illegal Moves", color: "#f97316" },
+        { column: "Empty square", label: "Empty Squares", color: "#a855f7" },
+        { column: "Repeated", label: "Repeated Moves", color: "#17a3f5" },
+        { column: "Champion Changes", label: "Champion Changes", color: "#024281"}
     ];
 
     // Validate CSV columns
